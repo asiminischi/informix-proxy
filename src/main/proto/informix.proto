@@ -1,0 +1,217 @@
+syntax = "proto3";
+
+package informix;
+
+option java_package = "com.informix.grpc";
+option java_multiple_files = true;
+
+// Informix Database Proxy Service
+service InformixService {
+  // Connection management
+  rpc Connect(ConnectionRequest) returns (ConnectionResponse);
+  rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
+  rpc Ping(PingRequest) returns (PingResponse);
+
+  // Query execution
+  rpc ExecuteQuery(QueryRequest) returns (stream QueryResponse);
+  rpc ExecuteUpdate(UpdateRequest) returns (UpdateResponse);
+  rpc ExecuteBatch(BatchRequest) returns (BatchResponse);
+
+  // Prepared statements (better performance for repeated queries)
+  rpc PrepareStatement(PrepareRequest) returns (PrepareResponse);
+  rpc ExecutePrepared(ExecutePreparedRequest) returns (stream QueryResponse);
+  rpc ClosePrepared(ClosePreparedRequest) returns (ClosePreparedResponse);
+
+  // Transaction management
+  rpc BeginTransaction(TransactionRequest) returns (TransactionResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+
+  // Metadata
+  rpc GetMetadata(MetadataRequest) returns (MetadataResponse);
+}
+
+// Connection messages
+message ConnectionRequest {
+  string host = 1;
+  int32 port = 2;
+  string database = 3;
+  string username = 4;
+  string password = 5;
+  map<string, string> properties = 6; // Additional JDBC properties
+  int32 pool_size = 7; // Connection pool size (default: 10)
+}
+
+message ConnectionResponse {
+  string connection_id = 1;
+  string server_version = 2;
+  bool success = 3;
+  string error = 4;
+}
+
+message DisconnectRequest {
+  string connection_id = 1;
+}
+
+message DisconnectResponse {
+  bool success = 1;
+}
+
+message PingRequest {
+  string connection_id = 1;
+}
+
+message PingResponse {
+  bool alive = 1;
+  int64 latency_ms = 2;
+}
+
+// Query execution messages
+message QueryRequest {
+  string connection_id = 1;
+  string sql = 2;
+  repeated Parameter parameters = 3;
+  int32 fetch_size = 4; // Rows per streaming chunk
+  int32 max_rows = 5; // Maximum rows to return (0 = unlimited)
+}
+
+message Parameter {
+  oneof value {
+    string string_value = 1;
+    int32 int_value = 2;
+    int64 long_value = 3;
+    double double_value = 4;
+    bool bool_value = 5;
+    bytes bytes_value = 6;
+  }
+  bool is_null = 7;
+  string type_hint = 8; // Optional: "DATE", "TIMESTAMP", "DECIMAL", etc.
+}
+
+message QueryResponse {
+  repeated Row rows = 1;
+  repeated ColumnMetadata columns = 2; // Only in first response
+  bool has_more = 3;
+  int32 total_rows = 4;
+  string error = 5;
+}
+
+message Row {
+  repeated Value values = 1;
+}
+
+message Value {
+  oneof data {
+    string string_data = 1;
+    int32 int_data = 2;
+    int64 long_data = 3;
+    double double_data = 4;
+    bool bool_data = 5;
+    bytes bytes_data = 6;
+  }
+  bool is_null = 7;
+}
+
+message ColumnMetadata {
+  string name = 1;
+  string type = 2;
+  int32 precision = 3;
+  int32 scale = 4;
+  bool nullable = 5;
+}
+
+message UpdateRequest {
+  string connection_id = 1;
+  string sql = 2;
+  repeated Parameter parameters = 3;
+}
+
+message UpdateResponse {
+  int32 rows_affected = 1;
+  string error = 2;
+}
+
+message BatchRequest {
+  string connection_id = 1;
+  repeated string sql_statements = 2;
+}
+
+message BatchResponse {
+  repeated int32 rows_affected = 1;
+  string error = 2;
+}
+
+// Prepared statement messages
+message PrepareRequest {
+  string connection_id = 1;
+  string sql = 2;
+}
+
+message PrepareResponse {
+  string statement_id = 1;
+  int32 parameter_count = 2;
+  string error = 3;
+}
+
+message ExecutePreparedRequest {
+  string connection_id = 1;
+  string statement_id = 2;
+  repeated Parameter parameters = 3;
+  int32 fetch_size = 4;
+}
+
+message ClosePreparedRequest {
+  string connection_id = 1;
+  string statement_id = 2;
+}
+
+message ClosePreparedResponse {
+  bool success = 1;
+}
+
+// Transaction messages
+message TransactionRequest {
+  string connection_id = 1;
+  string isolation_level = 2; // "READ_UNCOMMITTED", "READ_COMMITTED", etc.
+}
+
+message TransactionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message CommitRequest {
+  string connection_id = 1;
+}
+
+message CommitResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RollbackRequest {
+  string connection_id = 1;
+}
+
+message RollbackResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// Metadata messages
+message MetadataRequest {
+  string connection_id = 1;
+  string table_name = 2; // Optional: get columns for specific table
+}
+
+message MetadataResponse {
+  repeated TableInfo tables = 1;
+  string error = 2;
+}
+
+message TableInfo {
+  string name = 1;
+  string schema = 2;
+  string type = 3;
+  repeated ColumnMetadata columns = 4;
+}

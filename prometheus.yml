@@ -1,0 +1,121 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'informix-proxy-cluster'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'alertmanager:9093'
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - '/etc/prometheus/alerts.yml'
+
+# Scrape configurations
+scrape_configs:
+  #############################################################################
+  # Informix gRPC Proxy Metrics
+  #############################################################################
+  - job_name: 'informix-proxy'
+    static_configs:
+      - targets: ['informix-proxy:9090']
+        labels:
+          service: 'grpc-proxy'
+          tier: 'backend'
+
+    # HikariCP connection pool metrics
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'hikaricp_.*'
+        action: keep
+
+      # gRPC metrics
+      - source_labels: [__name__]
+        regex: 'grpc_.*'
+        action: keep
+
+      # JVM metrics
+      - source_labels: [__name__]
+        regex: 'jvm_.*'
+        action: keep
+
+      # Custom query metrics
+      - source_labels: [__name__]
+        regex: 'informix_.*'
+        action: keep
+
+  #############################################################################
+  # Prometheus Self-Monitoring
+  #############################################################################
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+  #############################################################################
+  # Node Exporter - System Metrics
+  #############################################################################
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          service: 'node-exporter'
+          tier: 'infrastructure'
+
+  #############################################################################
+  # cAdvisor - Container Metrics
+  #############################################################################
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          service: 'cadvisor'
+          tier: 'infrastructure'
+
+  #############################################################################
+  # Alertmanager
+  #############################################################################
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+        labels:
+          service: 'alertmanager'
+
+# Recording rules for better query performance
+# These pre-compute expensive queries
+recording_rules:
+  - name: proxy_recording_rules
+    interval: 30s
+    rules:
+      # Connection pool utilization percentage
+      - record: informix:hikaricp:pool_utilization_percent
+        expr: |
+          (hikaricp_connections_active / hikaricp_connections_max) * 100
+
+      # Query rate (queries per second)
+      - record: informix:query_rate:5m
+        expr: |
+          rate(informix_queries_total[5m])
+
+      # Average query duration
+      - record: informix:query_duration_seconds:avg_5m
+        expr: |
+          rate(informix_query_duration_seconds_sum[5m]) 
+          / 
+          rate(informix_query_duration_seconds_count[5m])
+
+      # Error rate
+      - record: informix:error_rate:5m
+        expr: |
+          rate(informix_errors_total[5m])
+
+      # Connection failures
+      - record: informix:connection_failures:5m
+        expr: |
+          rate(hikaricp_connections_timeout_total[5m])
