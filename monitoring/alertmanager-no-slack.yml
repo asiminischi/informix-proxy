@@ -1,0 +1,286 @@
+global:
+  # How long to wait before sending a notification again if it already sent one
+  repeat_interval: 4h
+
+  # ResolveTimeout is the default value used by alertmanager if the alert does
+  # not include EndsAt, after this time passes it can declare the alert as resolved if it has not been updated.
+  resolve_timeout: 5m
+
+  # SMTP Configuration for Email Alerts
+  # UPDATE THESE WITH YOUR SMTP SERVER DETAILS
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'informix-alerts@yourdomain.com'
+  smtp_auth_username: 'informix-alerts@yourdomain.com'
+  smtp_auth_password: 'your-app-password-here'
+  smtp_require_tls: true
+
+# The root route on which each incoming alert enters
+route:
+  # The labels by which incoming alerts are grouped together
+  group_by: ['alertname', 'cluster', 'service']
+
+  # When a new group of alerts is created by an incoming alert, wait at
+  # least 'group_wait' to send the initial notification
+  group_wait: 30s
+
+  # When the first notification was sent, wait 'group_interval' to send a batch
+  # of new alerts that started firing for that group
+  group_interval: 5m
+
+  # If an alert has successfully been sent, wait 'repeat_interval' to
+  # resend them
+  repeat_interval: 4h
+
+  # Default receiver (email)
+  receiver: 'email-default'
+
+  # Child routes
+  routes:
+    # Critical alerts go to PagerDuty (if you have it) or priority email
+    - match:
+        severity: critical
+      receiver: 'critical-email'
+      continue: true  # Also send to default
+
+    # Database-specific alerts
+    - match:
+        component: database
+      receiver: 'database-team-email'
+      group_by: ['alertname']
+
+    # Connection pool alerts
+    - match:
+        component: connection_pool
+      receiver: 'infrastructure-team-email'
+
+    # Application errors
+    - match:
+        component: application
+      receiver: 'dev-team-email'
+
+    # Info level alerts (low priority)
+    - match:
+        severity: info
+      receiver: 'info-email'
+      repeat_interval: 24h
+
+# Inhibition rules allow to mute a set of alerts given that another alert is firing
+inhibit_rules:
+  # If proxy is down, don't alert on connection failures
+  - source_match:
+      alertname: 'InformixProxyDown'
+    target_match:
+      component: 'connection_pool'
+    equal: ['cluster']
+
+  # If database is down, don't alert on query errors
+  - source_match:
+      alertname: 'DatabaseConnectionFailing'
+    target_match:
+      component: 'query_performance'
+    equal: ['cluster']
+
+  # Critical alerts suppress warnings for the same component
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'component']
+
+# Receivers configuration
+receivers:
+  #############################################################################
+  # DEFAULT EMAIL NOTIFICATIONS
+  #############################################################################
+  - name: 'email-default'
+    email_configs:
+      - to: 'team@yourdomain.com'
+        headers:
+          Subject: '[{{ .Status | toUpper }}] Informix Alert: {{ .GroupLabels.alertname }}'
+        html: |
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; }
+              .alert { padding: 15px; margin: 10px 0; border-radius: 5px; }
+              .critical { background-color: #ffebee; border-left: 5px solid #f44336; }
+              .warning { background-color: #fff3e0; border-left: 5px solid #ff9800; }
+              .info { background-color: #e3f2fd; border-left: 5px solid #2196f3; }
+              .resolved { background-color: #e8f5e9; border-left: 5px solid #4caf50; }
+              h2 { color: #333; }
+              .label { font-weight: bold; }
+              .value { color: #555; }
+            </style>
+          </head>
+          <body>
+            <h2>Informix gRPC Proxy Alert</h2>
+            {{ range .Alerts }}
+            <div class="alert {{ .Labels.severity }}">
+              <p><span class="label">Alert:</span> <span class="value">{{ .Labels.alertname }}</span></p>
+              <p><span class="label">Severity:</span> <span class="value">{{ .Labels.severity }}</span></p>
+              <p><span class="label">Component:</span> <span class="value">{{ .Labels.component }}</span></p>
+              <p><span class="label">Summary:</span> <span class="value">{{ .Annotations.summary }}</span></p>
+              <p><span class="label">Description:</span> <span class="value">{{ .Annotations.description }}</span></p>
+              {{ if .Annotations.runbook }}
+              <p><span class="label">Runbook:</span> <a href="{{ .Annotations.runbook }}">{{ .Annotations.runbook }}</a></p>
+              {{ end }}
+              {{ if .Annotations.dashboard }}
+              <p><span class="label">Dashboard:</span> <a href="{{ .Annotations.dashboard }}">{{ .Annotations.dashboard }}</a></p>
+              {{ end }}
+              <p><span class="label">Starts At:</span> <span class="value">{{ .StartsAt }}</span></p>
+            </div>
+            {{ end }}
+          </body>
+          </html>
+
+  #############################################################################
+  # CRITICAL EMAIL (High Priority)
+  #############################################################################
+  - name: 'critical-email'
+    email_configs:
+      - to: 'oncall@yourdomain.com, team-lead@yourdomain.com'
+        headers:
+          Subject: '🚨 [CRITICAL] Informix: {{ .GroupLabels.alertname }}'
+          Priority: 'urgent'
+          X-Priority: '1'
+        html: |
+          <h1 style="color: red;">🚨 CRITICAL ALERT</h1>
+          {{ range .Alerts }}
+          <h2>{{ .Labels.alertname }}</h2>
+          <p><strong>Summary:</strong> {{ .Annotations.summary }}</p>
+          <p><strong>Description:</strong> {{ .Annotations.description }}</p>
+          {{ if .Annotations.runbook }}
+          <p><strong>Action Required:</strong> <a href="{{ .Annotations.runbook }}">Follow Runbook</a></p>
+          {{ end }}
+          {{ end }}
+
+  #############################################################################
+  # MICROSOFT TEAMS WEBHOOK
+  #############################################################################
+  - name: 'teams-notifications'
+    webhook_configs:
+      - url: 'https://outlook.office.com/webhook/YOUR-WEBHOOK-URL-HERE'
+        send_resolved: true
+        http_config:
+          follow_redirects: true
+        # Teams uses a specific JSON format
+        # The webhook will receive the alert and format it
+
+  #############################################################################
+  # DISCORD WEBHOOK
+  #############################################################################
+  - name: 'discord-notifications'
+    webhook_configs:
+      - url: 'https://discord.com/api/webhooks/YOUR-WEBHOOK-ID/YOUR-WEBHOOK-TOKEN'
+        send_resolved: true
+
+  #############################################################################
+  # GENERIC WEBHOOK (for custom integrations)
+  #############################################################################
+  - name: 'custom-webhook'
+    webhook_configs:
+      - url: 'http://your-webhook-endpoint:8080/alerts'
+        send_resolved: true
+        http_config:
+          basic_auth:
+            username: 'alertmanager'
+            password: 'your-webhook-password'
+
+  #############################################################################
+  # PAGERDUTY (if you use it)
+  #############################################################################
+  - name: 'pagerduty-critical'
+    pagerduty_configs:
+      - service_key: 'YOUR_PAGERDUTY_INTEGRATION_KEY'
+        description: '{{ .GroupLabels.alertname }}: {{ .Annotations.summary }}'
+        severity: '{{ .Labels.severity }}'
+        details:
+          component: '{{ .Labels.component }}'
+          description: '{{ .Annotations.description }}'
+          runbook: '{{ .Annotations.runbook }}'
+
+  #############################################################################
+  # TEAM-SPECIFIC EMAIL CONFIGS
+  #############################################################################
+  - name: 'database-team-email'
+    email_configs:
+      - to: 'database-team@yourdomain.com'
+        headers:
+          Subject: '[Database] {{ .GroupLabels.alertname }}'
+
+  - name: 'infrastructure-team-email'
+    email_configs:
+      - to: 'infrastructure-team@yourdomain.com'
+        headers:
+          Subject: '[Infrastructure] {{ .GroupLabels.alertname }}'
+
+  - name: 'dev-team-email'
+    email_configs:
+      - to: 'dev-team@yourdomain.com'
+        headers:
+          Subject: '[Application] {{ .GroupLabels.alertname }}'
+
+  - name: 'info-email'
+    email_configs:
+      - to: 'informix-info@yourdomain.com'
+        headers:
+          Subject: '[INFO] Informix System Information'
+        send_resolved: false
+
+#############################################################################
+# SMTP CONFIGURATION EXAMPLES
+#############################################################################
+
+# Gmail:
+# smtp_smarthost: 'smtp.gmail.com:587'
+# smtp_auth_username: 'your-email@gmail.com'
+# smtp_auth_password: 'your-app-password'  # Get from: https://myaccount.google.com/apppasswords
+
+# Office 365:
+# smtp_smarthost: 'smtp.office365.com:587'
+# smtp_auth_username: 'your-email@company.com'
+# smtp_auth_password: 'your-password'
+
+# SendGrid:
+# smtp_smarthost: 'smtp.sendgrid.net:587'
+# smtp_auth_username: 'apikey'
+# smtp_auth_password: 'YOUR_SENDGRID_API_KEY'
+
+# AWS SES:
+# smtp_smarthost: 'email-smtp.us-east-1.amazonaws.com:587'
+# smtp_auth_username: 'YOUR_SMTP_USERNAME'
+# smtp_auth_password: 'YOUR_SMTP_PASSWORD'
+
+#############################################################################
+# WEBHOOK PAYLOAD EXAMPLES
+#############################################################################
+
+# The webhook receivers will receive a POST request with JSON payload:
+# {
+#   "version": "4",
+#   "groupKey": "{}:{alertname=\"HighErrorRate\"}",
+#   "status": "firing",
+#   "receiver": "custom-webhook",
+#   "groupLabels": {
+#     "alertname": "HighErrorRate"
+#   },
+#   "commonLabels": {
+#     "alertname": "HighErrorRate",
+#     "severity": "critical"
+#   },
+#   "commonAnnotations": {
+#     "summary": "High error rate detected",
+#     "description": "15% of queries are failing"
+#   },
+#   "externalURL": "http://alertmanager:9093",
+#   "alerts": [
+#     {
+#       "status": "firing",
+#       "labels": { ... },
+#       "annotations": { ... },
+#       "startsAt": "2024-01-15T10:30:00Z",
+#       "endsAt": "0001-01-01T00:00:00Z"
+#     }
+#   ]
+# }

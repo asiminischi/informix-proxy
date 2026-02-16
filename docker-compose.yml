@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # Informix gRPC Proxy
+  informix-proxy:
+    build: .
+    container_name: informix-grpc-proxy
+    ports:
+      - "50051:50051"
+    environment:
+      - GRPC_PORT=50051
+      - JAVA_OPTS=-Xmx1g -Xms512m
+    healthcheck:
+      test: ["CMD", "grpc-health-probe", "-addr=:50051"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - informix-network
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Informix database for testing
+  # Uncomment if you want to run a local Informix instance
+  informix-db:
+     image: ibmcom/informix-developer-database:latest
+     container_name: informix-db
+     privileged: true
+     environment:
+       - LICENSE=accept
+       - SIZE=small
+       - DB_NAME=stores_demo
+     ports:
+       - "9088:9088"
+       - "9089:9089"
+       - "27017:27017"
+       - "27018:27018"
+       - "27883:27883"
+     volumes:
+       - informix-data:/opt/ibm/data
+     networks:
+       - informix-network
+     restart: unless-stopped
+
+  # Optional: Prometheus for monitoring
+#  prometheus:
+#     image: prom/prometheus:latest
+#     container_name: prometheus
+#     ports:
+#       - "9090:9090"
+#     volumes:
+#       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+#       - prometheus-data:/prometheus
+#     networks:
+#       - informix-network
+#     restart: unless-stopped
+
+  # Optional: Grafana for visualization
+#  grafana:
+#     image: grafana/grafana:latest
+#     container_name: grafana
+#     ports:
+#       - "3000:3000"
+#     environment:
+#       - GF_SECURITY_ADMIN_PASSWORD=admin
+#     volumes:
+#       - grafana-data:/var/lib/grafana
+#     networks:
+#       - informix-network
+#     restart: unless-stopped
+
+networks:
+  informix-network:
+    driver: bridge
+
+volumes:
+  informix-data:
+  prometheus-data:
+  grafana-data:
