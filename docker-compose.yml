@@ -1,93 +1,515 @@
-version: '3.8'
-
-services:
-  # Informix gRPC Proxy
-  informix-proxy:
-    build: .
-    container_name: informix-grpc-proxy
-    ports:
-      - "50051:50051"
-    environment:
-      - GRPC_PORT=50051
-      - JAVA_OPTS=-Xmx1g -Xms512m
-    healthcheck:
-      test: ["CMD", "grpc-health-probe", "-addr=:50051"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-    networks:
-      - informix-network
-    # Resource limits
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # Optional: Informix database for testing
-  # Uncomment if you want to run a local Informix instance
-  informix-db:
-     image: ibmcom/informix-developer-database:latest
-     container_name: informix-db
-     privileged: true
-     environment:
-       - LICENSE=accept
-       - SIZE=small
-       - DB_NAME=stores_demo
-     ports:
-       - "9088:9088"
-       - "9089:9089"
-       - "27017:27017"
-       - "27018:27018"
-       - "27883:27883"
-     volumes:
-       - informix-data:/opt/ibm/data
-     networks:
-       - informix-network
-     restart: unless-stopped
-
-  # Optional: Prometheus for monitoring
-#  prometheus:
-#     image: prom/prometheus:latest
-#     container_name: prometheus
-#     ports:
-#       - "9090:9090"
-#     volumes:
-#       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-#       - prometheus-data:/prometheus
-#     networks:
-#       - informix-network
-#     restart: unless-stopped
-
-  # Optional: Grafana for visualization
-#  grafana:
-#     image: grafana/grafana:latest
-#     container_name: grafana
-#     ports:
-#       - "3000:3000"
-#     environment:
-#       - GF_SECURITY_ADMIN_PASSWORD=admin
-#     volumes:
-#       - grafana-data:/var/lib/grafana
-#     networks:
-#       - informix-network
-#     restart: unless-stopped
+#############################################################################
+# INFORMIX GRPC PROXY - PRODUCTION STACK
+#
+# This docker-compose file includes:
+# - Informix database with proper initialization
+# - gRPC Proxy service with metrics
+# - Full monitoring stack (Prometheus, Grafana, Alertmanager, Loki)
+# - Health checks and dependencies
+# - Proper volume management
+#
+# Deploy with: docker-compose up -d
+# Or in Portainer: Copy this file to a new stack
+#############################################################################
 
 networks:
   informix-network:
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
 
 volumes:
   informix-data:
+    driver: local
   prometheus-data:
+    driver: local
   grafana-data:
+    driver: local
+  alertmanager-data:
+    driver: local
+  loki-data:
+    driver: local
+
+services:
+  #############################################################################
+  # INFORMIX DATABASE - Test Database with Sample Data
+  #############################################################################
+  informix-db:
+    image: ibmcom/informix-developer-database:latest
+    container_name: informix-db
+    hostname: informix-db
+    privileged: true
+
+    # Informix requires shared memory well above Docker's 64MB default
+    shm_size: '1g'
+
+    environment:
+      # License acceptance (required)
+      - LICENSE=accept
+
+      # Database size (small for testing, medium/large for production)
+      - SIZE=small
+
+      # Server name (must match what the image actually uses)
+      - INFORMIXSERVER=informix
+
+      # Locale settings
+      - CLIENT_LOCALE=en_US.utf8
+      - DB_LOCALE=en_US.utf8
+
+    ports:
+      - "9088:9088"   # SQLI protocol
+      - "9089:9089"   # DRDA protocol
+      - "27017:27017" # MongoDB wire protocol
+      - "27018:27018" # REST API
+      - "27883:27883" # MQTT
+
+    volumes:
+      # Persistent data
+      - informix-data:/opt/ibm/data
+
+      # Database initialization script (available for manual exec too)
+      - ./scripts/init-db.sh:/opt/ibm/config/init-db.sh:ro
+
+      # Trust remote connections from db-init sidecar on the Docker network
+      - ./scripts/informix-rhosts:/home/informix/.rhosts:ro
+
+    # Health check - wait for Informix to be fully online
+    # Must set INFORMIXDIR/INFORMIXSERVER since health check runs outside the informix user env
+    healthcheck:
+      test: ["CMD-SHELL", "export INFORMIXDIR=/opt/ibm/informix INFORMIXSERVER=informix ONCONFIG=onconfig; /opt/ibm/informix/bin/onstat - 2>/dev/null | grep -q 'On-Line' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s  # First check after 60s, then every 15s
+
+    networks:
+      - informix-network
+
+    restart: unless-stopped
+
+    labels:
+      - "com.informix.component=database"
+      - "com.informix.environment=production"
+
+  #############################################################################
+  # DATABASE INITIALIZER - One-shot sidecar that creates testdb + sample data
+  # Runs after informix-db is healthy, then exits. Uses the same Informix
+  # image so dbaccess is available. Connects over the Docker network.
+  #############################################################################
+  db-init:
+    image: ibmcom/informix-developer-database:latest
+    container_name: db-init
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        # Point sqlhosts at the informix-db container over the network
+        echo "informix onsoctcp informix-db 9088" > /opt/ibm/informix/etc/sqlhosts
+        exec /opt/ibm/config/init-db.sh
+
+    environment:
+      - INFORMIXDIR=/opt/ibm/informix
+      - INFORMIXSERVER=informix
+      - ONCONFIG=onconfig
+
+    volumes:
+      - ./scripts/init-db.sh:/opt/ibm/config/init-db.sh:ro
+
+    depends_on:
+      informix-db:
+        condition: service_healthy
+
+    networks:
+      - informix-network
+
+    restart: "no"
+
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  #############################################################################
+  # INFORMIX GRPC PROXY - Main Service
+  #############################################################################
+  informix-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: informix-proxy
+    hostname: informix-proxy
+
+    ports:
+      - "50051:50051"  # gRPC service
+      - "9090:9090"    # Prometheus metrics
+
+    environment:
+      # Server configuration
+      - GRPC_PORT=50051
+      - METRICS_PORT=9090
+
+      # JVM tuning
+      - JAVA_OPTS=-Xmx2g -Xms1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp
+
+      # Default Informix connection (can be overridden by clients)
+      - DEFAULT_INFORMIX_HOST=informix-db
+      - DEFAULT_INFORMIX_PORT=9088
+      - DEFAULT_INFORMIX_DB=testdb
+      - DEFAULT_INFORMIX_USER=informix
+      - DEFAULT_INFORMIX_PASS=in4mix
+
+      # Connection pool defaults
+      - DEFAULT_POOL_SIZE=20
+      - DEFAULT_POOL_MIN_IDLE=5
+      - DEFAULT_POOL_MAX_LIFETIME=1800000
+      - DEFAULT_CONNECTION_TIMEOUT=30000
+
+    depends_on:
+      informix-db:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/metrics > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+
+    networks:
+      - informix-network
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+    labels:
+      - "com.informix.component=proxy"
+      - "com.informix.environment=production"
+
+  #############################################################################
+  # PROMETHEUS - Metrics Collection and Storage
+  #############################################################################
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    container_name: prometheus
+    hostname: prometheus
+
+    ports:
+      - "9091:9090"  # Using 9091 to avoid conflict with proxy metrics
+
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+
+    # No strict dependency - Prometheus starts independently and scrapes
+    # targets as they become available. This prevents cascade failures.
+
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    networks:
+      - informix-network
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+    labels:
+      - "com.informix.component=monitoring"
+      - "com.informix.service=prometheus"
+
+  #############################################################################
+  # GRAFANA - Visualization and Dashboards
+  #############################################################################
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: grafana
+    hostname: grafana
+
+    ports:
+      - "3000:3000"
+
+    environment:
+      # Admin credentials (CHANGE IN PRODUCTION!)
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+
+      # Server settings
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+
+      # Security settings
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+
+      # Plugin installation
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-clock-panel
+
+      # Database (using internal SQLite)
+      - GF_DATABASE_TYPE=sqlite3
+
+      # Logging
+      - GF_LOG_LEVEL=info
+
+      # Default home dashboard (Proxy Overview)
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/informix-proxy-dashboard.json
+
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+    # Grafana starts independently - datasources will connect when ready
+
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    networks:
+      - informix-network
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+    labels:
+      - "com.informix.component=monitoring"
+      - "com.informix.service=grafana"
+
+  #############################################################################
+  # ALERTMANAGER - Alert Routing and Notification
+  #############################################################################
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    hostname: alertmanager
+
+    ports:
+      - "9093:9093"
+
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+
+    # Alertmanager starts independently
+
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    networks:
+      - informix-network
+
+    restart: unless-stopped
+
+    labels:
+      - "com.informix.component=monitoring"
+      - "com.informix.service=alertmanager"
+
+  #############################################################################
+  # NODE EXPORTER - System Metrics
+  #############################################################################
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: node-exporter
+    hostname: node-exporter
+
+    ports:
+      - "9100:9100"
+
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+
+    networks:
+      - informix-network
+
+    restart: unless-stopped
+
+    labels:
+      - "com.informix.component=monitoring"
+      - "com.informix.service=node-exporter"
+
+  #############################################################################
+  # CADVISOR - Container Metrics
+  #############################################################################
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    hostname: cadvisor
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+    privileged: true
+
+    # Note: /dev/kmsg device removed for Docker Desktop (Windows/Mac) compatibility
+
+    networks:
+      - informix-network
+
+    restart: unless-stopped
+
+    labels:
+      - "com.informix.component=monitoring"
+      - "com.informix.service=cadvisor"
+
+  #############################################################################
+  # LOKI - Log Aggregation
+  #############################################################################
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: loki
+    hostname: loki
+
+    ports:
+      - "3100:3100"
+
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+
+    command: -config.file=/etc/loki/local-config.yaml
+
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    networks:
+      - informix-network
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+    labels:
+      - "com.informix.component=monitoring"
+      - "com.informix.service=loki"
+
+  #############################################################################
+  # PROMTAIL - Log Shipping to Loki
+  #############################################################################
+  promtail:
+    image: grafana/promtail:2.9.4
+    container_name: promtail
+    hostname: promtail
+
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    command: -config.file=/etc/promtail/config.yml
+
+    depends_on:
+      - loki
+
+    networks:
+      - informix-network
+
+    restart: unless-stopped
+
+    labels:
+      - "com.informix.component=monitoring"
+      - "com.informix.service=promtail"
+
+#############################################################################
+# USAGE INSTRUCTIONS
+#############################################################################
+
+# 1. Start the stack:
+#    docker-compose up -d
+#
+# 2. Wait for Informix to initialize (check logs):
+#    docker-compose logs -f informix-db
+#    (Wait for "Database initialization completed successfully!")
+#
+# 3. Access services:
+#    - Grafana:       http://localhost:3000 (admin/admin)
+#    - Prometheus:    http://localhost:9091
+#    - Alertmanager:  http://localhost:9093
+#    - gRPC Proxy:    localhost:50051
+#    - Informix DB:   localhost:9088
+#
+# 4. Test the proxy:
+#    cd clients/nodejs && npm install
+#    node test.js
+#
+# 5. View logs:
+#    docker-compose logs -f [service-name]
+#
+# 6. Stop the stack:
+#    docker-compose down
+#
+# 7. Remove all data (CAUTION):
+#    docker-compose down -v

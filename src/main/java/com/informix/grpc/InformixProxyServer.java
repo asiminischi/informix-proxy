@@ -2,9 +2,13 @@ package com.informix.grpc;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
+import io.prometheus.client.*;
+import io.prometheus.client.exporter.HTTPServer;
+import io.prometheus.client.hotspot.DefaultExports;
 
 import java.sql.*;
 import java.util.*;
@@ -12,32 +16,64 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * High-performance gRPC proxy for Informix databases
- *
- * Features:
- * - Connection pooling with HikariCP
- * - Streaming large result sets
- * - Prepared statement caching
- * - Proper transaction management
- * - Thread-safe operations
- */
 public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImplBase {
 
     private final Map<String, HikariDataSource> connectionPools = new ConcurrentHashMap<>();
     private final Map<String, PreparedStatement> preparedStatements = new ConcurrentHashMap<>();
     private final AtomicLong connectionIdCounter = new AtomicLong(0);
     private final AtomicLong statementIdCounter = new AtomicLong(0);
-
-    // Connection ID -> Connection mapping for transaction support
     private final Map<String, Connection> activeConnections = new ConcurrentHashMap<>();
+
+    // -- Prometheus metrics --
+
+    private static final Gauge clientConnections = Gauge.build()
+            .name("informix_connections_active")
+            .help("Number of active client connection pools")
+            .register();
+
+    private static final Counter queryCounter = Counter.build()
+            .name("informix_queries_total")
+            .help("Total queries executed")
+            .labelNames("type")
+            .register();
+
+    private static final Counter queryErrorCounter = Counter.build()
+            .name("informix_query_errors_total")
+            .help("Total query errors")
+            .register();
+
+    private static final Counter transactionCounter = Counter.build()
+            .name("informix_transactions_total")
+            .help("Total transactions")
+            .labelNames("type")
+            .register();
+
+    private static final Histogram grpcLatency = Histogram.build()
+            .name("grpc_server_handling_seconds")
+            .help("gRPC request handling duration in seconds")
+            .labelNames("method")
+            .buckets(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+            .register();
+
+    private static final Counter grpcRequests = Counter.build()
+            .name("grpc_server_handled_total")
+            .help("Total gRPC requests by method and status")
+            .labelNames("method", "status")
+            .register();
 
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("GRPC_PORT", "50051"));
+        int metricsPort = Integer.parseInt(System.getenv().getOrDefault("METRICS_PORT", "9090"));
+
+        DefaultExports.initialize();
+        InformixProxyServer service = new InformixProxyServer();
+        new PoolStatsCollector(service.connectionPools).register();
+        HTTPServer metricsServer = new HTTPServer.Builder().withPort(metricsPort).build();
+        System.out.println("Metrics server started on port " + metricsPort);
 
         Server server = ServerBuilder.forPort(port)
-                .addService(new InformixProxyServer())
-                .maxInboundMessageSize(50 * 1024 * 1024) // 50MB max message
+                .addService(service)
+                .maxInboundMessageSize(50 * 1024 * 1024)
                 .build()
                 .start();
 
@@ -45,6 +81,7 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("Shutting down gRPC server...");
+            metricsServer.close();
             server.shutdown();
             try {
                 server.awaitTermination(30, TimeUnit.SECONDS);
@@ -58,10 +95,10 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
 
     @Override
     public void connect(ConnectionRequest request, StreamObserver<ConnectionResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("Connect").startTimer();
         try {
             String connectionId = "conn_" + connectionIdCounter.incrementAndGet();
 
-            // Build JDBC URL
             String jdbcUrl = String.format(
                     "jdbc:informix-sqli://%s:%d/%s",
                     request.getHost(),
@@ -69,7 +106,6 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     request.getDatabase()
             );
 
-            // Add additional properties to URL
             if (!request.getPropertiesMap().isEmpty()) {
                 StringBuilder urlBuilder = new StringBuilder(jdbcUrl);
                 for (Map.Entry<String, String> entry : request.getPropertiesMap().entrySet()) {
@@ -78,26 +114,22 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                 jdbcUrl = urlBuilder.toString();
             }
 
-            // Configure HikariCP connection pool
             HikariConfig config = new HikariConfig();
             config.setJdbcUrl(jdbcUrl);
             config.setUsername(request.getUsername());
             config.setPassword(request.getPassword());
             config.setDriverClassName("com.informix.jdbc.IfxDriver");
 
-            // Pool configuration
             int poolSize = request.getPoolSize() > 0 ? request.getPoolSize() : 10;
             config.setMaximumPoolSize(poolSize);
             config.setMinimumIdle(2);
-            config.setConnectionTimeout(30000); // 30 seconds
-            config.setIdleTimeout(600000); // 10 minutes
-            config.setMaxLifetime(1800000); // 30 minutes
+            config.setConnectionTimeout(30000);
+            config.setIdleTimeout(600000);
+            config.setMaxLifetime(1800000);
             config.setConnectionTestQuery("SELECT 1 FROM systables WHERE tabid = 1");
 
-            // Create pool
             HikariDataSource dataSource = new HikariDataSource(config);
 
-            // Test connection
             String serverVersion = null;
             try (Connection conn = dataSource.getConnection()) {
                 DatabaseMetaData meta = conn.getMetaData();
@@ -105,6 +137,7 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
             }
 
             connectionPools.put(connectionId, dataSource);
+            clientConnections.inc();
 
             ConnectionResponse response = ConnectionResponse.newBuilder()
                     .setConnectionId(connectionId)
@@ -112,29 +145,34 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     .setSuccess(true)
                     .build();
 
+            grpcRequests.labels("Connect", "ok").inc();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
 
         } catch (Exception e) {
+            grpcRequests.labels("Connect", "error").inc();
             ConnectionResponse response = ConnectionResponse.newBuilder()
                     .setSuccess(false)
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void disconnect(DisconnectRequest request, StreamObserver<DisconnectResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("Disconnect").startTimer();
         try {
             HikariDataSource dataSource = connectionPools.remove(request.getConnectionId());
 
             if (dataSource != null) {
                 dataSource.close();
+                clientConnections.dec();
             }
 
-            // Clean up any active connection
             Connection conn = activeConnections.remove(request.getConnectionId());
             if (conn != null && !conn.isClosed()) {
                 conn.close();
@@ -144,20 +182,25 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     .setSuccess(true)
                     .build();
 
+            grpcRequests.labels("Disconnect", "ok").inc();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
 
         } catch (Exception e) {
+            grpcRequests.labels("Disconnect", "error").inc();
             DisconnectResponse response = DisconnectResponse.newBuilder()
                     .setSuccess(false)
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void ping(PingRequest request, StreamObserver<PingResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("Ping").startTimer();
         long startTime = System.currentTimeMillis();
 
         try {
@@ -180,22 +223,28 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     .setLatencyMs(latency)
                     .build();
 
+            grpcRequests.labels("Ping", "ok").inc();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
 
         } catch (Exception e) {
+            grpcRequests.labels("Ping", "error").inc();
             PingResponse response = PingResponse.newBuilder()
                     .setAlive(false)
                     .setLatencyMs(-1)
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void executeQuery(QueryRequest request, StreamObserver<QueryResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("ExecuteQuery").startTimer();
         try {
+            queryCounter.labels("query").inc();
             HikariDataSource dataSource = connectionPools.get(request.getConnectionId());
             if (dataSource == null) {
                 throw new SQLException("Connection not found");
@@ -211,10 +260,8 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
 
             try (PreparedStatement pstmt = conn.prepareStatement(request.getSql())) {
 
-                // Set parameters
                 setParameters(pstmt, request.getParametersList());
 
-                // Set fetch size for streaming
                 int fetchSize = request.getFetchSize() > 0 ? request.getFetchSize() : 100;
                 pstmt.setFetchSize(fetchSize);
 
@@ -226,7 +273,6 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     ResultSetMetaData meta = rs.getMetaData();
                     int columnCount = meta.getColumnCount();
 
-                    // Build column metadata (sent once)
                     List<ColumnMetadata> columns = new ArrayList<>();
                     for (int i = 1; i <= columnCount; i++) {
                         columns.add(ColumnMetadata.newBuilder()
@@ -238,7 +284,6 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                                 .build());
                     }
 
-                    // Stream results in chunks
                     List<Row> rowBatch = new ArrayList<>();
                     int totalRows = 0;
 
@@ -252,14 +297,12 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                         rowBatch.add(rowBuilder.build());
                         totalRows++;
 
-                        // Send batch when it reaches fetch size
                         if (rowBatch.size() >= fetchSize) {
                             QueryResponse.Builder responseBuilder = QueryResponse.newBuilder()
                                     .addAllRows(rowBatch)
                                     .setHasMore(true)
                                     .setTotalRows(totalRows);
 
-                            // Only send columns in first batch
                             if (totalRows == rowBatch.size()) {
                                 responseBuilder.addAllColumns(columns);
                             }
@@ -269,7 +312,6 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                         }
                     }
 
-                    // Send remaining rows
                     QueryResponse.Builder finalResponse = QueryResponse.newBuilder()
                             .addAllRows(rowBatch)
                             .setHasMore(false)
@@ -279,6 +321,7 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                         finalResponse.addAllColumns(columns);
                     }
 
+                    grpcRequests.labels("ExecuteQuery", "ok").inc();
                     responseObserver.onNext(finalResponse.build());
                     responseObserver.onCompleted();
                 }
@@ -289,17 +332,23 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
             }
 
         } catch (Exception e) {
+            grpcRequests.labels("ExecuteQuery", "error").inc();
+            queryErrorCounter.inc();
             QueryResponse error = QueryResponse.newBuilder()
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(error);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void executeUpdate(UpdateRequest request, StreamObserver<UpdateResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("ExecuteUpdate").startTimer();
         try {
+            queryCounter.labels("update").inc();
             HikariDataSource dataSource = connectionPools.get(request.getConnectionId());
             if (dataSource == null) {
                 throw new SQLException("Connection not found");
@@ -322,6 +371,7 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                         .setRowsAffected(rowsAffected)
                         .build();
 
+                grpcRequests.labels("ExecuteUpdate", "ok").inc();
                 responseObserver.onNext(response);
                 responseObserver.onCompleted();
             } finally {
@@ -331,18 +381,24 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
             }
 
         } catch (Exception e) {
+            grpcRequests.labels("ExecuteUpdate", "error").inc();
+            queryErrorCounter.inc();
             UpdateResponse response = UpdateResponse.newBuilder()
                     .setRowsAffected(-1)
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void executeBatch(BatchRequest request, StreamObserver<BatchResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("ExecuteBatch").startTimer();
         try {
+            queryCounter.labels("batch").inc();
             HikariDataSource dataSource = connectionPools.get(request.getConnectionId());
             if (dataSource == null) {
                 throw new SQLException("Connection not found");
@@ -368,6 +424,7 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     responseBuilder.addRowsAffected(result);
                 }
 
+                grpcRequests.labels("ExecuteBatch", "ok").inc();
                 responseObserver.onNext(responseBuilder.build());
                 responseObserver.onCompleted();
             } finally {
@@ -377,16 +434,21 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
             }
 
         } catch (Exception e) {
+            grpcRequests.labels("ExecuteBatch", "error").inc();
+            queryErrorCounter.inc();
             BatchResponse response = BatchResponse.newBuilder()
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void prepareStatement(PrepareRequest request, StreamObserver<PrepareResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("PrepareStatement").startTimer();
         try {
             HikariDataSource dataSource = connectionPools.get(request.getConnectionId());
             if (dataSource == null) {
@@ -406,21 +468,28 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     .setParameterCount(paramMeta.getParameterCount())
                     .build();
 
+            grpcRequests.labels("PrepareStatement", "ok").inc();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
 
         } catch (Exception e) {
+            grpcRequests.labels("PrepareStatement", "error").inc();
+            queryErrorCounter.inc();
             PrepareResponse response = PrepareResponse.newBuilder()
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void executePrepared(ExecutePreparedRequest request, StreamObserver<QueryResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("ExecutePrepared").startTimer();
         try {
+            queryCounter.labels("prepared").inc();
             PreparedStatement pstmt = preparedStatements.get(request.getStatementId());
             if (pstmt == null) {
                 throw new SQLException("Prepared statement not found");
@@ -483,21 +552,27 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     finalResponse.addAllColumns(columns);
                 }
 
+                grpcRequests.labels("ExecutePrepared", "ok").inc();
                 responseObserver.onNext(finalResponse.build());
                 responseObserver.onCompleted();
             }
 
         } catch (Exception e) {
+            grpcRequests.labels("ExecutePrepared", "error").inc();
+            queryErrorCounter.inc();
             QueryResponse error = QueryResponse.newBuilder()
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(error);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void closePrepared(ClosePreparedRequest request, StreamObserver<ClosePreparedResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("ClosePrepared").startTimer();
         try {
             PreparedStatement pstmt = preparedStatements.remove(request.getStatementId());
 
@@ -513,21 +588,27 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     .setSuccess(true)
                     .build();
 
+            grpcRequests.labels("ClosePrepared", "ok").inc();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
 
         } catch (Exception e) {
+            grpcRequests.labels("ClosePrepared", "error").inc();
             ClosePreparedResponse response = ClosePreparedResponse.newBuilder()
                     .setSuccess(false)
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void beginTransaction(TransactionRequest request, StreamObserver<TransactionResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("BeginTransaction").startTimer();
         try {
+            transactionCounter.labels("begin").inc();
             HikariDataSource dataSource = connectionPools.get(request.getConnectionId());
             if (dataSource == null) {
                 throw new SQLException("Connection not found");
@@ -536,7 +617,6 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
             Connection conn = dataSource.getConnection();
             conn.setAutoCommit(false);
 
-            // Set isolation level if specified
             if (!request.getIsolationLevel().isEmpty()) {
                 switch (request.getIsolationLevel()) {
                     case "READ_UNCOMMITTED":
@@ -560,22 +640,28 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     .setSuccess(true)
                     .build();
 
+            grpcRequests.labels("BeginTransaction", "ok").inc();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
 
         } catch (Exception e) {
+            grpcRequests.labels("BeginTransaction", "error").inc();
             TransactionResponse response = TransactionResponse.newBuilder()
                     .setSuccess(false)
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void commit(CommitRequest request, StreamObserver<CommitResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("Commit").startTimer();
         try {
+            transactionCounter.labels("commit").inc();
             Connection conn = activeConnections.get(request.getConnectionId());
 
             if (conn == null) {
@@ -591,22 +677,28 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     .setSuccess(true)
                     .build();
 
+            grpcRequests.labels("Commit", "ok").inc();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
 
         } catch (Exception e) {
+            grpcRequests.labels("Commit", "error").inc();
             CommitResponse response = CommitResponse.newBuilder()
                     .setSuccess(false)
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void rollback(RollbackRequest request, StreamObserver<RollbackResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("Rollback").startTimer();
         try {
+            transactionCounter.labels("rollback").inc();
             Connection conn = activeConnections.get(request.getConnectionId());
 
             if (conn == null) {
@@ -622,21 +714,26 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                     .setSuccess(true)
                     .build();
 
+            grpcRequests.labels("Rollback", "ok").inc();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
 
         } catch (Exception e) {
+            grpcRequests.labels("Rollback", "error").inc();
             RollbackResponse response = RollbackResponse.newBuilder()
                     .setSuccess(false)
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
 
     @Override
     public void getMetadata(MetadataRequest request, StreamObserver<MetadataResponse> responseObserver) {
+        Histogram.Timer timer = grpcLatency.labels("GetMetadata").startTimer();
         try {
             HikariDataSource dataSource = connectionPools.get(request.getConnectionId());
             if (dataSource == null) {
@@ -649,7 +746,6 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                 List<TableInfo> tables = new ArrayList<>();
 
                 if (request.getTableName().isEmpty()) {
-                    // Get all tables
                     try (ResultSet rs = meta.getTables(null, null, "%", new String[]{"TABLE"})) {
                         while (rs.next()) {
                             String tableName = rs.getString("TABLE_NAME");
@@ -663,7 +759,6 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                         }
                     }
                 } else {
-                    // Get specific table with columns
                     try (ResultSet rs = meta.getColumns(null, null, request.getTableName(), "%")) {
                         List<ColumnMetadata> columns = new ArrayList<>();
 
@@ -691,20 +786,22 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                         .addAllTables(tables)
                         .build();
 
+                grpcRequests.labels("GetMetadata", "ok").inc();
                 responseObserver.onNext(response);
                 responseObserver.onCompleted();
             }
 
         } catch (Exception e) {
+            grpcRequests.labels("GetMetadata", "error").inc();
             MetadataResponse response = MetadataResponse.newBuilder()
                     .setError(e.getMessage())
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();
+        } finally {
+            timer.observeDuration();
         }
     }
-
-    // Helper methods
 
     private void setParameters(PreparedStatement pstmt, List<Parameter> parameters) throws SQLException {
         for (int i = 0; i < parameters.size(); i++) {
@@ -750,7 +847,6 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
             return valueBuilder.setIsNull(true).build();
         }
 
-        // Map SQL types to protobuf types
         switch (sqlType) {
             case Types.VARCHAR:
             case Types.CHAR:
@@ -792,10 +888,54 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
                 valueBuilder.setStringData(rs.getString(columnIndex));
                 break;
             default:
-                // Fallback to string representation
                 valueBuilder.setStringData(value.toString());
         }
 
         return valueBuilder.build();
+    }
+
+    /**
+     * Custom Prometheus collector that reads HikariCP pool statistics at scrape time.
+     */
+    private static class PoolStatsCollector extends Collector {
+        private final Map<String, HikariDataSource> pools;
+
+        PoolStatsCollector(Map<String, HikariDataSource> pools) {
+            this.pools = pools;
+        }
+
+        @Override
+        public List<MetricFamilySamples> collect() {
+            List<MetricFamilySamples> mfs = new ArrayList<>();
+            int active = 0, idle = 0, total = 0, pending = 0;
+
+            for (HikariDataSource ds : pools.values()) {
+                try {
+                    HikariPoolMXBean bean = ds.getHikariPoolMXBean();
+                    if (bean != null) {
+                        active += bean.getActiveConnections();
+                        idle += bean.getIdleConnections();
+                        total += bean.getTotalConnections();
+                        pending += bean.getThreadsAwaitingConnection();
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
+            mfs.add(new GaugeMetricFamily(
+                    "informix_pool_active_connections",
+                    "Active JDBC connections across all pools", active));
+            mfs.add(new GaugeMetricFamily(
+                    "informix_pool_idle_connections",
+                    "Idle JDBC connections across all pools", idle));
+            mfs.add(new GaugeMetricFamily(
+                    "informix_pool_total_connections",
+                    "Total JDBC connections across all pools", total));
+            mfs.add(new GaugeMetricFamily(
+                    "informix_pool_pending_threads",
+                    "Threads waiting for a JDBC connection", pending));
+
+            return mfs;
+        }
     }
 }

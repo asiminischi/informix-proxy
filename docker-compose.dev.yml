@@ -1,0 +1,51 @@
+services:
+  # Informix gRPC Proxy (built from this project)
+  informix-proxy-dev:
+    build: .
+    container_name: informix-grpc-proxy-dev
+    ports:
+      - "50051:50051"
+      - "9090:9090"
+    environment:
+      - GRPC_PORT=50051
+      - METRICS_PORT=9090
+      - JAVA_OPTS=-Xmx512m -Xms256m
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - informix-network-dev
+
+  # Optional local Informix developer DB for testing
+  informix-db-dev:
+    image: ibmcom/informix-developer-database:latest
+    container_name: informix-db-dev
+    privileged: true
+    environment:
+      - LICENSE=accept
+      - SIZE=small
+      - INFORMIXSERVER=informix
+      - DB_NAME=stores_demo
+    ports:
+      - "9088:9088"
+      - "9089:9089"
+    volumes:
+      - informix-data-dev:/opt/ibm/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - informix-network-dev
+
+networks:
+  informix-network-dev:
+    driver: bridge
+
+volumes:
+  informix-data-dev:

@@ -1,16 +1,13 @@
 global:
-  # How long to wait before sending a notification again if it already sent one
-  repeat_interval: 4h
-
-  # ResolveTimeout is the default value used by alertmanager if the alert does
-  # not include EndsAt, after this time passes it can declare the alert as resolved if it has not been updated.
+  # Default notification settings
   resolve_timeout: 5m
 
-  # Default notification settings
-  smtp_smarthost: 'smtp.example.com:587'
-  smtp_from: 'alertmanager@example.com'
-  smtp_auth_username: 'alertmanager@example.com'
-  smtp_auth_password: 'your-smtp-password'
+  # NOTE: Email/Slack/PagerDuty alerting is disabled.
+  # To enable email alerts, uncomment and configure:
+  # smtp_smarthost: 'smtp.example.com:587'
+  # smtp_from: 'alertmanager@example.com'
+  # smtp_auth_username: 'alertmanager@example.com'
+  # smtp_auth_password: 'your-smtp-password'
 
 # The root route on which each incoming alert enters
 route:
@@ -25,45 +22,13 @@ route:
   # of new alerts that started firing for that group
   group_interval: 5m
 
-  # If an alert has successfully been sent, wait 'repeat_interval' to
-  # resend them
+  # If an alert has successfully been sent, wait before resending
   repeat_interval: 4h
 
-  # Default receiver
-  receiver: 'team-notifications'
-
-  # Child routes
-  routes:
-    # Critical alerts go to PagerDuty
-    - match:
-        severity: critical
-      receiver: 'pagerduty-critical'
-      continue: true  # Also send to team notifications
-
-    # Database-specific alerts
-    - match:
-        component: database
-      receiver: 'database-team'
-      group_by: ['alertname']
-
-    # Connection pool alerts
-    - match:
-        component: connection_pool
-      receiver: 'infrastructure-team'
-
-    # Application errors
-    - match:
-        component: application
-      receiver: 'dev-team'
-
-    # Info level alerts (low priority)
-    - match:
-        severity: info
-      receiver: 'info-notifications'
-      repeat_interval: 24h
+  # Default receiver - logs only (no external notifications)
+  receiver: 'log-only'
 
 # Inhibition rules allow to mute a set of alerts given that another alert is firing
-# This reduces alert fatigue when cascading failures occur
 inhibit_rules:
   # If proxy is down, don't alert on connection failures
   - source_match:
@@ -89,96 +54,30 @@ inhibit_rules:
 # Receivers configuration
 receivers:
   #############################################################################
-  # Team Notifications (Slack)
+  # Log-only receiver (no external notifications)
+  # Alerts are still visible in Alertmanager UI at http://localhost:9093
   #############################################################################
-  - name: 'team-notifications'
-    slack_configs:
-      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
-        channel: '#informix-alerts'
-        username: 'Informix Alertmanager'
-        icon_emoji: ':warning:'
-        title: '{{ .GroupLabels.alertname }}'
-        text: >-
-          {{ range .Alerts }}
-          *Alert:* {{ .Labels.alertname }}
-          *Severity:* {{ .Labels.severity }}
-          *Summary:* {{ .Annotations.summary }}
-          *Description:* {{ .Annotations.description }}
-          {{ if .Annotations.runbook }}*Runbook:* {{ .Annotations.runbook }}{{ end }}
-          {{ if .Annotations.dashboard }}*Dashboard:* {{ .Annotations.dashboard }}{{ end }}
-          {{ end }}
-        send_resolved: true
+  - name: 'log-only'
+    # No notification integrations configured.
+    # Alerts are visible in the Alertmanager web UI.
+    # To enable notifications, add webhook_configs, slack_configs,
+    # email_configs, or pagerduty_configs here.
 
   #############################################################################
-  # PagerDuty for Critical Alerts
+  # EXAMPLE: Uncomment to enable Slack notifications
   #############################################################################
-  - name: 'pagerduty-critical'
-    pagerduty_configs:
-      - service_key: 'YOUR_PAGERDUTY_SERVICE_KEY'
-        description: '{{ .GroupLabels.alertname }}: {{ .Annotations.summary }}'
-        details:
-          severity: '{{ .Labels.severity }}'
-          component: '{{ .Labels.component }}'
-          description: '{{ .Annotations.description }}'
-          runbook: '{{ .Annotations.runbook }}'
+  # - name: 'slack-notifications'
+  #   slack_configs:
+  #     - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+  #       channel: '#informix-alerts'
+  #       username: 'Informix Alertmanager'
+  #       send_resolved: true
 
   #############################################################################
-  # Database Team (Email)
+  # EXAMPLE: Uncomment to enable Email notifications
   #############################################################################
-  - name: 'database-team'
-    email_configs:
-      - to: 'database-team@example.com'
-        headers:
-          Subject: '[{{ .Status | toUpper }}] Informix Database Alert: {{ .GroupLabels.alertname }}'
-        html: |
-          <h2>Informix Database Alert</h2>
-          {{ range .Alerts }}
-          <h3>{{ .Labels.alertname }}</h3>
-          <p><strong>Severity:</strong> {{ .Labels.severity }}</p>
-          <p><strong>Component:</strong> {{ .Labels.component }}</p>
-          <p><strong>Summary:</strong> {{ .Annotations.summary }}</p>
-          <p><strong>Description:</strong> {{ .Annotations.description }}</p>
-          {{ if .Annotations.runbook }}<p><strong>Runbook:</strong> <a href="{{ .Annotations.runbook }}">{{ .Annotations.runbook }}</a></p>{{ end }}
-          {{ if .Annotations.dashboard }}<p><strong>Dashboard:</strong> <a href="{{ .Annotations.dashboard }}">{{ .Annotations.dashboard }}</a></p>{{ end }}
-          <hr>
-          {{ end }}
-
-  #############################################################################
-  # Infrastructure Team (Slack)
-  #############################################################################
-  - name: 'infrastructure-team'
-    slack_configs:
-      - api_url: 'https://hooks.slack.com/services/YOUR/INFRASTRUCTURE/WEBHOOK'
-        channel: '#infrastructure-alerts'
-        username: 'Informix Infra Bot'
-        icon_emoji: ':construction:'
-        title: 'Infrastructure Alert: {{ .GroupLabels.alertname }}'
-        text: '{{ range .Alerts }}{{ .Annotations.summary }}: {{ .Annotations.description }}{{ end }}'
-        send_resolved: true
-
-  #############################################################################
-  # Development Team (Slack)
-  #############################################################################
-  - name: 'dev-team'
-    slack_configs:
-      - api_url: 'https://hooks.slack.com/services/YOUR/DEV/WEBHOOK'
-        channel: '#dev-alerts'
-        username: 'Informix App Bot'
-        icon_emoji: ':bug:'
-        title: 'Application Alert: {{ .GroupLabels.alertname }}'
-        text: '{{ range .Alerts }}{{ .Annotations.summary }}: {{ .Annotations.description }}{{ end }}'
-        send_resolved: true
-
-  #############################################################################
-  # Info Notifications (Email digest)
-  #############################################################################
-  - name: 'info-notifications'
-    email_configs:
-      - to: 'informix-info@example.com'
-        headers:
-          Subject: '[INFO] Informix System Information'
-        send_resolved: false
-
-# Templates for notification formatting
-templates:
-  - '/etc/alertmanager/templates/*.tmpl'
+  # - name: 'email-notifications'
+  #   email_configs:
+  #     - to: 'team@example.com'
+  #       headers:
+  #         Subject: '[{{ .Status | toUpper }}] Informix Alert: {{ .GroupLabels.alertname }}'

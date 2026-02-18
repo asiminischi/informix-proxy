@@ -1,311 +1,313 @@
-groups:
-  #############################################################################
-  # Connection Pool Alerts
-  #############################################################################
-  - name: connection_pool_alerts
-    interval: 30s
-    rules:
-      # Connection pool approaching capacity
-      - alert: ConnectionPoolHighUtilization
-        expr: |
-          (hikaricp_connections_active / hikaricp_connections_max) * 100 > 80
-        for: 5m
-        labels:
-          severity: warning
-          component: connection_pool
-        annotations:
-          summary: "Connection pool utilization high"
-          description: "Connection pool is at {{ $value }}% capacity for {{ $labels.pool }}. Consider increasing pool size."
-          dashboard: "http://grafana:3000/d/informix-proxy/connection-pool"
-
-      # Connection pool at capacity
-      - alert: ConnectionPoolExhausted
-        expr: |
-          (hikaricp_connections_active / hikaricp_connections_max) * 100 >= 95
-        for: 2m
-        labels:
-          severity: critical
-          component: connection_pool
-        annotations:
-          summary: "Connection pool exhausted"
-          description: "Connection pool {{ $labels.pool }} is at {{ $value }}% capacity. New connections will be blocked!"
-          runbook: "https://wiki.example.com/runbooks/connection-pool-exhausted"
-
-      # Connection timeout rate increasing
-      - alert: ConnectionTimeoutRateHigh
-        expr: |
-          rate(hikaricp_connections_timeout_total[5m]) > 0.1
-        for: 5m
-        labels:
-          severity: warning
-          component: connection_pool
-        annotations:
-          summary: "High connection timeout rate"
-          description: "Connection timeouts occurring at {{ $value }} per second for pool {{ $labels.pool }}"
-
-      # Too many idle connections (waste of resources)
-      - alert: ConnectionPoolIdleTooHigh
-        expr: |
-          (hikaricp_connections_idle / hikaricp_connections_max) * 100 > 60
-        for: 30m
-        labels:
-          severity: info
-          component: connection_pool
-        annotations:
-          summary: "Connection pool has too many idle connections"
-          description: "Pool {{ $labels.pool }} has {{ $value }}% idle connections. Consider reducing minimum idle."
-
-  #############################################################################
-  # Query Performance Alerts
-  #############################################################################
-  - name: query_performance_alerts
-    interval: 30s
-    rules:
-      # Slow queries
-      - alert: SlowQueriesDetected
-        expr: |
-          histogram_quantile(0.95, 
-            rate(informix_query_duration_seconds_bucket[5m])
-          ) > 5
-        for: 10m
-        labels:
-          severity: warning
-          component: query_performance
-        annotations:
-          summary: "Slow queries detected"
-          description: "95th percentile query duration is {{ $value }}s. Check for missing indexes or expensive queries."
-
-      # Extremely slow queries
-      - alert: VerySlowQueriesDetected
-        expr: |
-          histogram_quantile(0.99, 
-            rate(informix_query_duration_seconds_bucket[5m])
-          ) > 30
-        for: 5m
-        labels:
-          severity: critical
-          component: query_performance
-        annotations:
-          summary: "Very slow queries detected"
-          description: "99th percentile query duration is {{ $value }}s. Immediate investigation required!"
-
-      # Query rate spike
-      - alert: QueryRateSpike
-        expr: |
-          rate(informix_queries_total[5m]) 
-          > 
-          avg_over_time(informix:query_rate:5m[1h]) * 2
-        for: 5m
-        labels:
-          severity: warning
-          component: query_performance
-        annotations:
-          summary: "Unusual query rate spike"
-          description: "Query rate is {{ $value }} qps, which is 2x the hourly average"
-
-  #############################################################################
-  # Error Rate Alerts
-  #############################################################################
-  - name: error_rate_alerts
-    interval: 30s
-    rules:
-      # Elevated error rate
-      - alert: HighErrorRate
-        expr: |
-          (
-            rate(informix_errors_total[5m]) 
-            / 
-            rate(informix_queries_total[5m])
-          ) * 100 > 5
-        for: 5m
-        labels:
-          severity: warning
-          component: errors
-        annotations:
-          summary: "High error rate detected"
-          description: "{{ $value }}% of queries are failing"
-
-      # Critical error rate
-      - alert: CriticalErrorRate
-        expr: |
-          (
-            rate(informix_errors_total[5m]) 
-            / 
-            rate(informix_queries_total[5m])
-          ) * 100 > 20
-        for: 2m
-        labels:
-          severity: critical
-          component: errors
-        annotations:
-          summary: "Critical error rate"
-          description: "{{ $value }}% of queries are failing! Database may be down."
-          runbook: "https://wiki.example.com/runbooks/critical-error-rate"
-
-      # SQL syntax errors (application bug)
-      - alert: SQLSyntaxErrorsIncreasing
-        expr: |
-          rate(informix_sql_errors_total{type="syntax"}[5m]) > 0.5
-        for: 10m
-        labels:
-          severity: warning
-          component: application
-        annotations:
-          summary: "SQL syntax errors increasing"
-          description: "{{ $value }} SQL syntax errors per second. Check application code."
-
-  #############################################################################
-  # System Resource Alerts
-  #############################################################################
-  - name: system_resource_alerts
-    interval: 30s
-    rules:
-      # High JVM heap usage
-      - alert: JVMHeapUsageHigh
-        expr: |
-          (jvm_memory_used_bytes{area="heap"} 
-          / 
-          jvm_memory_max_bytes{area="heap"}) * 100 > 85
-        for: 5m
-        labels:
-          severity: warning
-          component: jvm
-        annotations:
-          summary: "JVM heap usage high"
-          description: "JVM heap usage is at {{ $value }}%. May need to increase heap size."
-
-      # JVM GC taking too long
-      - alert: JVMGCTimeHigh
-        expr: |
-          rate(jvm_gc_collection_seconds_sum[5m]) * 100 > 10
-        for: 5m
-        labels:
-          severity: warning
-          component: jvm
-        annotations:
-          summary: "JVM spending too much time in GC"
-          description: "{{ $value }}% of time spent in garbage collection"
-
-      # Too many threads
-      - alert: JVMThreadCountHigh
-        expr: |
-          jvm_threads_current > 500
-        for: 10m
-        labels:
-          severity: warning
-          component: jvm
-        annotations:
-          summary: "High thread count"
-          description: "{{ $value }} threads active. Possible thread leak."
-
-  #############################################################################
-  # Service Availability Alerts
-  #############################################################################
-  - name: service_availability_alerts
-    interval: 15s
-    rules:
-      # Proxy is down
-      - alert: InformixProxyDown
-        expr: |
-          up{job="informix-proxy"} == 0
-        for: 1m
-        labels:
-          severity: critical
-          component: proxy
-        annotations:
-          summary: "Informix gRPC Proxy is down"
-          description: "The proxy service is not responding to health checks"
-          runbook: "https://wiki.example.com/runbooks/proxy-down"
-
-      # Database connectivity issues
-      - alert: DatabaseConnectionFailing
-        expr: |
-          rate(hikaricp_connections_creation_total[5m]) == 0
-          and
-          hikaricp_connections_active < hikaricp_connections_min
-        for: 3m
-        labels:
-          severity: critical
-          component: database
-        annotations:
-          summary: "Cannot connect to Informix database"
-          description: "No new connections being created. Database may be down."
-          runbook: "https://wiki.example.com/runbooks/database-down"
-
-      # gRPC service unhealthy
-      - alert: GRPCServiceUnhealthy
-        expr: |
-          rate(grpc_server_handled_total{grpc_code!="OK"}[5m])
-          /
-          rate(grpc_server_handled_total[5m]) > 0.05
-        for: 5m
-        labels:
-          severity: warning
-          component: grpc
-        annotations:
-          summary: "gRPC service unhealthy"
-          description: "{{ $value | humanizePercentage }} of gRPC calls failing"
-
-  #############################################################################
-  # Transaction Alerts
-  #############################################################################
-  - name: transaction_alerts
-    interval: 30s
-    rules:
-      # Long-running transactions
-      - alert: LongRunningTransactions
-        expr: |
-          informix_transaction_duration_seconds > 300
-        for: 5m
-        labels:
-          severity: warning
-          component: transactions
-        annotations:
-          summary: "Long-running transaction detected"
-          description: "Transaction running for {{ $value }}s. May cause lock contention."
-
-      # High rollback rate
-      - alert: HighTransactionRollbackRate
-        expr: |
-          (
-            rate(informix_transactions_rollback_total[5m])
-            /
-            rate(informix_transactions_total[5m])
-          ) * 100 > 20
-        for: 10m
-        labels:
-          severity: warning
-          component: transactions
-        annotations:
-          summary: "High transaction rollback rate"
-          description: "{{ $value }}% of transactions are being rolled back"
-
-  #############################################################################
-  # Client Alerts
-  #############################################################################
-  - name: client_alerts
-    interval: 30s
-    rules:
-      # Many clients disconnecting
-      - alert: HighClientDisconnectRate
-        expr: |
-          rate(informix_client_disconnects_total[5m]) > 10
-        for: 5m
-        labels:
-          severity: warning
-          component: clients
-        annotations:
-          summary: "High client disconnect rate"
-          description: "{{ $value }} clients per second disconnecting. Check for network issues."
-
-      # No active clients (service not being used)
-      - alert: NoActiveClients
-        expr: |
-          informix_active_clients == 0
-        for: 30m
-        labels:
-          severity: info
-          component: clients
-        annotations:
-          summary: "No active clients"
-          description: "No clients connected for 30 minutes. Service may be unused or unreachable."
+#groups:
+#  #############################################################################
+#  # Connection Pool Alerts
+#  #############################################################################
+#  - name: connection_pool_alerts
+#    interval: 30s
+#    rules:
+#      # Connection pool approaching capacity
+#      - alert: ConnectionPoolHighUtilization
+#        expr: |
+#          (hikaricp_connections_active / hikaricp_connections_max) * 100 > 80
+#        for: 5m
+#        labels:
+#          severity: warning
+#          component: connection_pool
+#        annotations:
+#          summary: "Connection pool utilization high"
+#          description: "Connection pool is at {{ $value }}% capacity for {{ $labels.pool }}. Consider increasing pool size."
+#          dashboard: "http://grafana:3000/d/informix-proxy/connection-pool"
+#
+#      # Connection pool at capacity
+#      - alert: ConnectionPoolExhausted
+#        expr: |
+#          (hikaricp_connections_active / hikaricp_connections_max) * 100 >= 95
+#        for: 2m
+#        labels:
+#          severity: critical
+#          component: connection_pool
+#        annotations:
+#          summary: "Connection pool exhausted"
+#          description: "Connection pool {{ $labels.pool }} is at {{ $value }}% capacity. New connections will be blocked!"
+#          runbook: "https://wiki.example.com/runbooks/connection-pool-exhausted"
+#
+#      # Connection timeout rate increasing
+#      - alert: ConnectionTimeoutRateHigh
+#        expr: |
+#          rate(hikaricp_connections_timeout_total[5m]) > 0.1
+#        for: 5m
+#        labels:
+#          severity: warning
+#          component: connection_pool
+#        annotations:
+#          summary: "High connection timeout rate"
+#          description: "Connection timeouts occurring at {{ $value }} per second for pool {{ $labels.pool }}"
+#
+#      # Too many idle connections (waste of resources)
+#      - alert: ConnectionPoolIdleTooHigh
+#        expr: |
+#          (hikaricp_connections_idle / hikaricp_connections_max) * 100 > 60
+#        for: 30m
+#        labels:
+#          severity: info
+#          component: connection_pool
+#        annotations:
+#          summary: "Connection pool has too many idle connections"
+#          description: "Pool {{ $labels.pool }} has {{ $value }}% idle connections. Consider reducing minimum idle."
+#
+#  #############################################################################
+#  # Query Performance Alerts
+#  #############################################################################
+#  - name: query_performance_alerts
+#    interval: 30s
+#    rules:
+#      # Slow queries
+#      - alert: SlowQueriesDetected
+#        expr: |
+#          histogram_quantile(0.95,
+#            rate(informix_query_duration_seconds_bucket[5m])
+#          ) > 5
+#        for: 10m
+#        labels:
+#          severity: warning
+#          component: query_performance
+#        annotations:
+#          summary: "Slow queries detected"
+#          description: "95th percentile query duration is {{ $value }}s. Check for missing indexes or expensive queries."
+#
+#      # Extremely slow queries
+#      - alert: VerySlowQueriesDetected
+#        expr: |
+#          histogram_quantile(0.99,
+#            rate(informix_query_duration_seconds_bucket[5m])
+#          ) > 30
+#        for: 5m
+#        labels:
+#          severity: critical
+#          component: query_performance
+#        annotations:
+#          summary: "Very slow queries detected"
+#          description: "99th percentile query duration is {{ $value }}s. Immediate investigation required!"
+#
+#      # Query rate spike
+#      - alert: QueryRateSpike
+#        expr: |
+#          rate(informix_queries_total[5m])
+#          >
+#          avg_over_time(informix:query_rate:5m[1h]) * 2
+#        for: 5m
+#        labels:
+#          severity: warning
+#          component: query_performance
+#        annotations:
+#          summary: "Unusual query rate spike"
+#          description: "Query rate is {{ $value }} qps, which is 2x the hourly average"
+#
+#  #############################################################################
+#  # Error Rate Alerts
+#  #############################################################################
+#  - name: error_rate_alerts
+#    interval: 30s
+#    rules:
+#      # Elevated error rate
+#      - alert: HighErrorRate
+#        expr: |
+#          (
+#            rate(informix_errors_total[5m])
+#            /
+#            rate(informix_queries_total[5m])
+#          ) * 100 > 5
+#        for: 5m
+#        labels:
+#          severity: warning
+#          component: errors
+#        annotations:
+#          summary: "High error rate detected"
+#          description: "{{ $value }}% of queries are failing"
+#
+#      # Critical error rate
+#      - alert: CriticalErrorRate
+#        expr: |
+#          (
+#            rate(informix_errors_total[5m])
+#            /
+#            rate(informix_queries_total[5m])
+#          ) * 100 > 20
+#        for: 2m
+#        labels:
+#          severity: critical
+#          component: errors
+#        annotations:
+#          summary: "Critical error rate"
+#          description: "{{ $value }}% of queries are failing! Database may be down."
+#          runbook: "https://wiki.example.com/runbooks/critical-error-rate"
+#
+#      # SQL syntax errors (application bug)
+#      - alert: SQLSyntaxErrorsIncreasing
+#        expr: |
+#          rate(informix_sql_errors_total{type="syntax"}[5m]) > 0.5
+#        for: 10m
+#        labels:
+#          severity: warning
+#          component: application
+#        annotations:
+#          summary: "SQL syntax errors increasing"
+#          description: "{{ $value }} SQL syntax errors per second. Check application code."
+#
+#  #############################################################################
+#  # System Resource Alerts
+#  #############################################################################
+#  - name: system_resource_alerts
+#    interval: 30s
+#    rules:
+#      # High JVM heap usage
+#      - alert: JVMHeapUsageHigh
+#        expr: |
+#          (jvm_memory_used_bytes{area="heap"}
+#          /
+#          jvm_memory_max_bytes{area="heap"}) * 100 > 85
+#        for: 5m
+#        labels:
+#          severity: warning
+#          component: jvm
+#        annotations:
+#          summary: "JVM heap usage high"
+#          description: "JVM heap usage is at {{ $value }}%. May need to increase heap size."
+#
+#      # JVM GC taking too long
+#      - alert: JVMGCTimeHigh
+#        expr: |
+#          rate(jvm_gc_collection_seconds_sum[5m]) * 100 > 10
+#        for: 5m
+#        labels:
+#          severity: warning
+#          component: jvm
+#        annotations:
+#          summary: "JVM spending too much time in GC"
+#          description: "{{ $value }}% of time spent in garbage collection"
+#
+#      # Too many threads
+#      - alert: JVMThreadCountHigh
+#        expr: |
+#          jvm_threads_current > 500
+#        for: 10m
+#        labels:
+#          severity: warning
+#          component: jvm
+#        annotations:
+#          summary: "High thread count"
+#          description: "{{ $value }} threads active. Possible thread leak."
+#
+#  #############################################################################
+#  # Service Availability Alerts
+#  #############################################################################
+#  - name: service_availability_alerts
+#    interval: 15s
+#    rules:
+#      # Proxy is down
+#      - alert: InformixProxyDown
+#        expr: |
+#          up{job="informix-proxy"} == 0
+#        for: 1m
+#        labels:
+#          severity: critical
+#          component: proxy
+#        annotations:
+#          summary: "Informix gRPC Proxy is down"
+#          description: "The proxy service is not responding to health checks"
+#          runbook: "https://wiki.example.com/runbooks/proxy-down"
+#
+#      # Database connectivity issues
+#      - alert: DatabaseConnectionFailing
+#        expr: |
+#          rate(hikaricp_connections_creation_total[5m]) == 0
+#          and
+#          hikaricp_connections_active < hikaricp_connections_min
+#        for: 3m
+#        labels:
+#          severity: critical
+#          component: database
+#        annotations:
+#          summary: "Cannot connect to Informix database"
+#          description: "No new connections being created. Database may be down."
+#          runbook: "https://wiki.example.com/runbooks/database-down"
+#
+#      # gRPC service unhealthy
+#      - alert: GRPCServiceUnhealthy
+#        expr: |
+#          rate(grpc_server_handled_total{grpc_code!="OK"}[5m])
+#          /
+#          rate(grpc_server_handled_total[5m]) > 0.05
+#        for: 5m
+#        labels:
+#          severity: warning
+#          component: grpc
+#        annotations:
+#          summary: "gRPC service unhealthy"
+#          description: "{{ $value | humanizePercentage }} of gRPC calls failing"
+#
+#  #############################################################################
+#  # Transaction Alerts
+#  #############################################################################
+#  - name: transaction_alerts
+#    interval: 30s
+#    rules:
+#      # Long-running transactions
+#      - alert: LongRunningTransactions
+#        expr: |
+#          informix_transaction_duration_seconds > 300
+#        for: 5m
+#        labels:
+#          severity: warning
+#          component: transactions
+#        annotations:
+#          summary: "Long-running transaction detected"
+#          description: "Transaction running for {{ $value }}s. May cause lock contention."
+#
+#      # High rollback rate
+#      - alert: HighTransactionRollbackRate
+#        expr: |
+#          (
+#            rate(informix_transactions_rollback_total[5m])
+#            /
+#            rate(informix_transactions_total[5m])
+#          ) * 100 > 20
+#        for: 10m
+#        labels:
+#          severity: warning
+#          component: transactions
+#        annotations:
+#          summary: "High transaction rollback rate"
+#          description: "{{ $value }}% of transactions are being rolled back"
+#
+#  #############################################################################
+#  # Client Alerts
+#  #############################################################################
+#  - name: client_alerts
+#    interval: 30s
+#    rules:
+#      # Many clients disconnecting
+#      - alert: HighClientDisconnectRate
+#        expr: |
+#          rate(informix_client_disconnects_total[5m]) > 10
+#        for: 5m
+#        labels:
+#          severity: warning
+#          component: clients
+#        annotations:
+#          summary: "High client disconnect rate"
+#          description: "{{ $value }} clients per second disconnecting. Check for network issues."
+#
+#      # No active clients (service not being used)
+#      - alert: NoActiveClients
+#        expr: |
+#          informix_active_clients == 0
+#        for: 30m
+#        labels:
+#          severity: info
+#          component: clients
+#        annotations:
+#          summary: "No active clients"
+#          description: "No clients connected for 30 minutes. Service may be unused or unreachable."
+# Empty groups list (no rules)
+groups: []

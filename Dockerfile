@@ -13,10 +13,6 @@ RUN mvn protobuf:compile protobuf:compile-custom
 # Copy source code
 COPY src/ /app/src/
 
-# Copy Informix JDBC driver
-# You need to place the jdbc-4.50.10.jar file in the lib/ directory
-#COPY lib/ /app/lib/
-
 # Build the application
 RUN mvn package -DskipTests
 
@@ -25,15 +21,18 @@ FROM eclipse-temurin:11-jre-jammy
 
 WORKDIR /app
 
+# Install curl for health checks
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
 # Copy the fat JAR from builder
 COPY --from=builder /app/target/informix-grpc-proxy-1.0.0.jar /app/proxy.jar
 
-# Expose gRPC port
-EXPOSE 50051
+# Expose gRPC and metrics ports
+EXPOSE 50051 9090
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD grpc-health-probe -addr=:50051 || exit 1
+# Health check using metrics endpoint
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -sf http://localhost:9090/metrics > /dev/null || exit 1
 
 # Run the proxy
 ENTRYPOINT ["java", "-jar", "/app/proxy.jar"]
