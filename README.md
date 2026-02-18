@@ -22,7 +22,7 @@ This starts:
 - **db-init** -- one-shot container that creates a test database with sample data, then exits
 - **informix-proxy** -- the gRPC proxy (port 50051 for gRPC, port 9090 for metrics)
 - **prometheus** -- metrics collection (port 9091)
-- **grafana** -- dashboards (port 3000, login: admin/admin)
+- **grafana** -- dashboards (port 3030, login: admin/admin)
 - **alertmanager** -- alert routing (port 9093)
 - **node-exporter**, **cadvisor** -- host and container metrics
 - **loki**, **promtail** -- log aggregation
@@ -77,7 +77,7 @@ The proxy exposes these RPC methods (defined in `src/main/proto/informix.proto`)
 
 ## Monitoring
 
-Grafana is at http://localhost:3000 (admin/admin). Two dashboards are provisioned automatically:
+Grafana is at http://localhost:3030 (admin/admin). Two dashboards are provisioned automatically:
 
 - **Informix gRPC Proxy** -- query rates, latency percentiles, connection pool state, gRPC method breakdown, JVM heap/threads/GC
 - **Infrastructure** -- scrape target status, Prometheus internals

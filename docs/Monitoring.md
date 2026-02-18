@@ -3,14 +3,14 @@
 ## Components
 
 - **Prometheus** (port 9091) -- scrapes metrics from the proxy, node-exporter, cadvisor, and alertmanager every 15 seconds
-- **Grafana** (port 3000) -- dashboards, provisioned automatically from JSON files
+- **Grafana** (port 3030) -- dashboards, provisioned automatically from JSON files
 - **Alertmanager** (port 9093) -- receives alerts from Prometheus, currently configured for log-only (no external notifications)
 - **Loki** (port 3100) -- log aggregation
 - **Promtail** -- ships Docker container logs to Loki
 
 ## Accessing the dashboards
 
-Open http://localhost:3000 and log in with admin/admin.
+Open http://localhost:3030 and log in with admin/admin.
 
 Two dashboards are provisioned automatically:
 

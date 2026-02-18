@@ -16,7 +16,7 @@
 #        annotations:
 #          summary: "Connection pool utilization high"
 #          description: "Connection pool is at {{ $value }}% capacity for {{ $labels.pool }}. Consider increasing pool size."
-#          dashboard: "http://grafana:3000/d/informix-proxy/connection-pool"
+#          dashboard: "http://grafana:3030/d/informix-proxy/connection-pool"
 #
 #      # Connection pool at capacity
 #      - alert: ConnectionPoolExhausted

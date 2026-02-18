@@ -263,7 +263,7 @@ services:
     hostname: grafana
 
     ports:
-      - "3000:3000"
+      - "3030:3030"
 
     environment:
       # Admin credentials (CHANGE IN PRODUCTION!)
@@ -271,7 +271,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
 
       # Server settings
-      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_SERVER_ROOT_URL=http://localhost:3030
       - GF_SERVER_SERVE_FROM_SUB_PATH=false
 
       # Security settings
@@ -298,7 +298,7 @@ services:
     # Grafana starts independently - datasources will connect when ready
 
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3030/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -496,7 +496,7 @@ services:
 #    (Wait for "Database initialization completed successfully!")
 #
 # 3. Access services:
-#    - Grafana:       http://localhost:3000 (admin/admin)
+#    - Grafana:       http://localhost:3030 (admin/admin)
 #    - Prometheus:    http://localhost:9091
 #    - Alertmanager:  http://localhost:9093
 #    - gRPC Proxy:    localhost:50051

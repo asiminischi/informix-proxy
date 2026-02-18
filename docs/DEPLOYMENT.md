@@ -47,7 +47,7 @@ docker compose up -d informix-proxy
 | informix-proxy | 50051 | gRPC API |
 | informix-proxy | 9090 | Prometheus metrics |
 | prometheus | 9091 | Prometheus UI (mapped from 9090 inside) |
-| grafana | 3000 | Grafana dashboards (admin/admin) |
+| grafana | 3030 | Grafana dashboards (admin/admin) |
 | alertmanager | 9093 | Alertmanager UI |
 | node-exporter | 9100 | Host metrics |
 | cadvisor | 8080 | Container metrics |
