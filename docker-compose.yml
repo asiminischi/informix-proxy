@@ -14,6 +14,7 @@
 
 networks:
   informix-network:
+    name: informix-network
     driver: bridge
     ipam:
       driver: default

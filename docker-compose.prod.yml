@@ -221,6 +221,7 @@ services:
 
 networks:
   informix-network:
+    name: informix-network
     driver: bridge
     ipam:
       config:
