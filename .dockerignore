@@ -1,0 +1,42 @@
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Build artifacts (the Dockerfile runs its own mvn build)
+target/
+build/
+
+# Documentation (not needed in the image)
+docs/
+*.md
+LICENSE
+
+# Client libraries (not needed in the proxy image)
+clients/
+
+# Monitoring configs (mounted separately via compose)
+monitoring/
+
+# Docker and compose files
+docker-compose*.yml
+Dockerfile
+PORTAINER_STACK.yml
+
+# Scripts (init-db runs in a separate container)
+scripts/
+
+# Misc
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+node_modules/
+__pycache__/

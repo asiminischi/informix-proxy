@@ -22,11 +22,11 @@ services:
       - informix-data:/opt/ibm/data
       - ./scripts/init-db.sh:/opt/ibm/init/init-db.sh
     healthcheck:
-      test: ["CMD-SHELL", "echo 'SELECT COUNT(*) FROM systables;' | dbaccess sysmaster || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "export INFORMIXDIR=/opt/ibm/informix INFORMIXSERVER=informix ONCONFIG=onconfig; /opt/ibm/informix/bin/onstat - 2>/dev/null | grep -q 'On-Line' || exit 1"]
+      interval: 15s
       timeout: 10s
-      retries: 5
-      start_period: 120s
+      retries: 20
+      start_period: 60s
     networks:
       - informix-network
     restart: unless-stopped
@@ -52,11 +52,11 @@ services:
       informix-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/app/health-check.sh"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/metrics > /dev/null || exit 1"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 60s
     networks:
       - informix-network
     restart: unless-stopped

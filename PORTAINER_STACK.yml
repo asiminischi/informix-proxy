@@ -1,0 +1,222 @@
+version: '3.8'
+
+# ═══════════════════════════════════════════════════════════════════════
+# INFORMIX GRPC PROXY - PORTAINER STACK
+#
+# Deploy this stack in Portainer with the following environment variables:
+# - GRAFANA_ADMIN_PASSWORD (required)
+# - ALERT_EMAIL (required)
+# - SMTP_HOST (required - e.g., smtp.gmail.com:587)
+# - SMTP_USER (required)
+# - SMTP_PASSWORD (required)
+# - PROXY_MEMORY_LIMIT (optional, default: 4G)
+# - INFORMIX_SIZE (optional, default: medium)
+# ═══════════════════════════════════════════════════════════════════════
+
+networks:
+  informix:
+    driver: bridge
+
+volumes:
+  db-data:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:
+  loki-data:
+
+services:
+  # Informix Database
+  database:
+    image: ibmcom/informix-developer-database:14.10.FC9DE
+    environment:
+      LICENSE: accept
+      SIZE: ${INFORMIX_SIZE:-medium}
+      INFORMIXSERVER: informix
+      DB_INIT: "1"
+      DB_NAME: testdb
+      DB_USER: informix
+      DB_PASS: in4mix
+      CLIENT_LOCALE: en_US.utf8
+      DB_LOCALE: en_US.utf8
+    ports:
+      - "9088:9088"
+    volumes:
+      - db-data:/opt/ibm/data
+    networks:
+      - informix
+    restart: unless-stopped
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'SELECT 1 FROM systables WHERE tabid=1;' | dbaccess sysmaster | grep -q 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    labels:
+      - "com.portainer.component=database"
+
+  # gRPC Proxy
+  proxy:
+    image: ${DOCKER_REGISTRY:-}informix-grpc-proxy:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      GRPC_PORT: "50051"
+      METRICS_PORT: "9090"
+      JAVA_OPTS: "-Xmx2g -Xms1g -XX:+UseG1GC"
+      DEFAULT_INFORMIX_HOST: database
+      DEFAULT_INFORMIX_PORT: "9088"
+      DEFAULT_INFORMIX_DB: testdb
+      DEFAULT_INFORMIX_USER: informix
+      DEFAULT_INFORMIX_PASS: in4mix
+    ports:
+      - "50051:50051"
+      - "9090:9090"
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - informix
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9090/metrics || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: ${PROXY_MEMORY_LIMIT:-4G}
+        reservations:
+          cpus: '1'
+          memory: 1G
+    labels:
+      - "com.portainer.component=proxy"
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - informix
+    restart: unless-stopped
+    depends_on:
+      - proxy
+    labels:
+      - "com.portainer.component=monitoring"
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:10.3.1
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: http://localhost:3000
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - informix
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    labels:
+      - "com.portainer.component=monitoring"
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.yourdomain.com`)"
+
+  # Alertmanager
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    environment:
+      ALERT_EMAIL: ${ALERT_EMAIL:-alerts@example.com}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com:587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+    networks:
+      - informix
+    restart: unless-stopped
+    labels:
+      - "com.portainer.component=monitoring"
+
+  # Node Exporter
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    ports:
+      - "9100:9100"
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - informix
+    restart: unless-stopped
+    labels:
+      - "com.portainer.component=monitoring"
+
+  # Loki
+  loki:
+    image: grafana/loki:2.9.4
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - informix
+    restart: unless-stopped
+    labels:
+      - "com.portainer.component=monitoring"
+
+  # Promtail
+  promtail:
+    image: grafana/promtail:2.9.4
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - informix
+    restart: unless-stopped
+    depends_on:
+      - loki
+    labels:
+      - "com.portainer.component=monitoring"
