@@ -29,6 +29,7 @@ const CONFIG = Object.freeze({
     informix: {
         host:     process.env.INFORMIX_HOST     || 'informix-db',
         port:     parseInt(process.env.INFORMIX_PORT, 10) || 9088,
+        server:   process.env.INFORMIX_SERVER   || 'informix',
         database: process.env.INFORMIX_DB       || 'testdb',
         username: process.env.INFORMIX_USER     || 'informix',
         password: process.env.INFORMIX_PASSWORD || 'in4mix',
