@@ -108,8 +108,11 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
 
             if (!request.getPropertiesMap().isEmpty()) {
                 StringBuilder urlBuilder = new StringBuilder(jdbcUrl);
+                boolean first = true;
                 for (Map.Entry<String, String> entry : request.getPropertiesMap().entrySet()) {
-                    urlBuilder.append(";").append(entry.getKey()).append("=").append(entry.getValue());
+                    // Informix JDBC URL: first property separated by ':', rest by ';'
+                    urlBuilder.append(first ? ":" : ";").append(entry.getKey()).append("=").append(entry.getValue());
+                    first = false;
                 }
                 jdbcUrl = urlBuilder.toString();
             }
@@ -151,9 +154,19 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
 
         } catch (Exception e) {
             grpcRequests.labels("Connect", "error").inc();
+            // Build a meaningful error message even when getMessage() is null
+            String errorMsg = e.getMessage();
+            if (errorMsg == null || errorMsg.isEmpty()) {
+                errorMsg = e.getClass().getSimpleName();
+                if (e.getCause() != null) {
+                    errorMsg += ": " + (e.getCause().getMessage() != null
+                            ? e.getCause().getMessage()
+                            : e.getCause().getClass().getSimpleName());
+                }
+            }
             ConnectionResponse response = ConnectionResponse.newBuilder()
                     .setSuccess(false)
-                    .setError(e.getMessage())
+                    .setError("Failed to initialize pool: " + errorMsg)
                     .build();
             responseObserver.onNext(response);
             responseObserver.onCompleted();

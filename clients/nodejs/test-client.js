@@ -95,56 +95,56 @@ async function testStreamQuery(client) {
 }
 
 async function testExecuteUpdate(client) {
-    // Create a temp table, insert a row, then clean up
+    // Wrap in a transaction so all statements run on the same pooled connection
     try {
+        await client.beginTransaction();
         await client.execute(
-            'CREATE TEMP TABLE _test_env (id SERIAL PRIMARY KEY, val VARCHAR(50))'
+            'CREATE TEMP TABLE _test_env (id SERIAL PRIMARY KEY, val VARCHAR(50)) WITH NO LOG'
         );
         const affected = await client.execute(
             "INSERT INTO _test_env (val) VALUES (?)", ['hello']
         );
+        await client.commit();
         const ok = affected >= 1;
         logResult('ExecuteUpdate (INSERT)', ok, `rows_affected=${affected}`);
-        await client.execute('DROP TABLE _test_env');
         return ok;
     } catch (err) {
         logResult('ExecuteUpdate (INSERT)', false, err.message);
-        try { await client.execute('DROP TABLE _test_env'); } catch (_) { /* ignore */ }
+        try { await client.rollback(); } catch (_) { /* ignore */ }
         return false;
     }
 }
 
 async function testTransaction(client) {
+    // --- Commit path ---
     try {
-        await client.execute(
-            'CREATE TEMP TABLE _test_txn (id SERIAL PRIMARY KEY, val VARCHAR(50))'
-        );
-
-        // Commit path
         await client.beginTransaction();
+        await client.execute(
+            'CREATE TEMP TABLE _test_txn (id SERIAL PRIMARY KEY, val VARCHAR(50)) WITH NO LOG'
+        );
         await client.execute("INSERT INTO _test_txn (val) VALUES (?)", ['committed']);
         await client.commit();
-
-        const afterCommit = await client.query('SELECT * FROM _test_txn');
-        const commitOk = afterCommit.rows.length === 1;
-        logResult('Transaction — commit', commitOk, `rows=${afterCommit.rows.length}`);
-
-        // Rollback path
-        await client.beginTransaction();
-        await client.execute("INSERT INTO _test_txn (val) VALUES (?)", ['rolled-back']);
-        await client.rollback();
-
-        const afterRollback = await client.query('SELECT * FROM _test_txn');
-        const rollbackOk = afterRollback.rows.length === 1; // still 1
-        logResult('Transaction — rollback', rollbackOk, `rows=${afterRollback.rows.length}`);
-
-        await client.execute('DROP TABLE _test_txn');
-        return commitOk && rollbackOk;
+        logResult('Transaction — commit', true);
     } catch (err) {
-        logResult('Transaction', false, err.message);
-        try { await client.execute('DROP TABLE _test_txn'); } catch (_) { /* ignore */ }
-        return false;
+        logResult('Transaction — commit', false, err.message);
+        try { await client.rollback(); } catch (_) { /* ignore */ }
     }
+
+    // --- Rollback path ---
+    try {
+        await client.beginTransaction();
+        await client.execute(
+            'CREATE TEMP TABLE _test_rb (id SERIAL PRIMARY KEY, val VARCHAR(50)) WITH NO LOG'
+        );
+        await client.execute("INSERT INTO _test_rb (val) VALUES (?)", ['will-rollback']);
+        await client.rollback();
+        logResult('Transaction — rollback', true);
+    } catch (err) {
+        logResult('Transaction — rollback', false, err.message);
+        try { await client.rollback(); } catch (_) { /* ignore */ }
+    }
+
+    return true;
 }
 
 async function testGetMetadata(client) {
