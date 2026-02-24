@@ -1,15 +1,27 @@
+# Development compose - sources configuration from .env (see .env.example)
+
 services:
   # Informix gRPC Proxy (built from this project)
   informix-proxy-dev:
     build: .
     container_name: informix-grpc-proxy-dev
     ports:
-      - "50051:50051"
-      - "9090:9090"
+      - "${GRPC_PORT:-50051}:50051"
+      - "${METRICS_PORT:-9090}:9090"
     environment:
-      - GRPC_PORT=50051
-      - METRICS_PORT=9090
-      - JAVA_OPTS=-Xmx512m -Xms256m
+      - GRPC_PORT=${GRPC_PORT:-50051}
+      - METRICS_PORT=${METRICS_PORT:-9090}
+      - JAVA_OPTS=${JAVA_OPTS:--Xmx512m -Xms256m}
+      - INFORMIX_HOST=${INFORMIX_HOST:-informix-db-dev}
+      - INFORMIX_PORT=${INFORMIX_PORT:-9088}
+      - INFORMIX_SERVER=${INFORMIX_SERVER:-informix}
+      - INFORMIX_DB=${INFORMIX_DB:-testdb}
+      - INFORMIX_USER=${INFORMIX_USER:-informix}
+      - INFORMIX_PASSWORD=${INFORMIX_PASSWORD:-in4mix}
+      - POOL_SIZE=${POOL_SIZE:-10}
+      - POOL_MIN_IDLE=${POOL_MIN_IDLE:-2}
+      - POOL_MAX_LIFETIME=${POOL_MAX_LIFETIME:-1800000}
+      - CONNECTION_TIMEOUT=${CONNECTION_TIMEOUT:-30000}
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -27,8 +39,8 @@ services:
     environment:
       - LICENSE=accept
       - SIZE=small
-      - INFORMIXSERVER=informix
-      - DB_NAME=stores_demo
+      - INFORMIXSERVER=${INFORMIX_SERVER:-informix}
+      - DB_NAME=${INFORMIX_DB:-testdb}
     ports:
       - "9088:9088"
       - "9089:9089"
