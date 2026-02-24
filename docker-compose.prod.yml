@@ -1,4 +1,4 @@
-version: '3.8'
+# All configurable values are read from .env (see .env.example)
 
 services:
   #############################################################################
@@ -12,8 +12,9 @@ services:
       - LICENSE=accept
       - SIZE=small
       - DB_INIT=1
+      - INFORMIXSERVER=${INFORMIX_SERVER:-informix}
     ports:
-      - "9088:9088"     # Informix SQLI protocol
+      - "${INFORMIX_PORT:-9088}:9088"   # Informix SQLI protocol
       - "9089:9089"     # Informix Mongo API
       - "27017:27017"   # MongoDB wire protocol
       - "27018:27018"   # REST API
@@ -40,14 +41,22 @@ services:
       dockerfile: Dockerfile
     container_name: informix-grpc-proxy
     ports:
-      - "50051:50051"   # gRPC
-      - "9090:9090"     # Prometheus metrics
+      - "${GRPC_PORT:-50051}:50051"     # gRPC
+      - "${METRICS_PORT:-9090}:9090"     # Prometheus metrics
     environment:
-      - GRPC_PORT=50051
-      - METRICS_PORT=9090
-      - JAVA_OPTS=-Xmx2g -Xms1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
-      - INFORMIX_HOST=informix-db
-      - INFORMIX_PORT=9088
+      - GRPC_PORT=${GRPC_PORT:-50051}
+      - METRICS_PORT=${METRICS_PORT:-9090}
+      - JAVA_OPTS=${JAVA_OPTS:--Xmx2g -Xms1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200}
+      - INFORMIX_HOST=${INFORMIX_HOST:-informix-db}
+      - INFORMIX_PORT=${INFORMIX_PORT:-9088}
+      - INFORMIX_SERVER=${INFORMIX_SERVER:-informix}
+      - INFORMIX_DB=${INFORMIX_DB:-testdb}
+      - INFORMIX_USER=${INFORMIX_USER:-informix}
+      - INFORMIX_PASSWORD=${INFORMIX_PASSWORD:-in4mix}
+      - POOL_SIZE=${POOL_SIZE:-20}
+      - POOL_MIN_IDLE=${POOL_MIN_IDLE:-5}
+      - POOL_MAX_LIFETIME=${POOL_MAX_LIFETIME:-1800000}
+      - CONNECTION_TIMEOUT=${CONNECTION_TIMEOUT:-30000}
     depends_on:
       informix-db:
         condition: service_healthy
@@ -110,8 +119,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=http://localhost:3000
       - GF_INSTALL_PLUGINS=grafana-piechart-panel
