@@ -1,5 +1,8 @@
 # Informix gRPC Proxy
 
+> **This service replaces [`informixdbservice`](https://github.com/asiminischi/informixdbservice), which is now deprecated.**  
+> See [docs/MIGRATION.md](docs/MIGRATION.md) for a step-by-step guide to switch over.
+
 A gRPC proxy server that sits between your applications and an IBM Informix database. It handles connection pooling, query streaming, transactions, and exposes Prometheus metrics. Clients connect over gRPC (port 50051) instead of using Informix JDBC drivers directly.
 
 ## Why this exists
@@ -86,12 +89,30 @@ Prometheus is at http://localhost:9091. All proxy metrics are scraped from `info
 
 See [docs/MONITORING.md](docs/MONITORING.md) for details on available metrics and alerting.
 
+## Migration from informixdbservice
+
+If your project currently uses [`informixdbservice`](https://github.com/asiminischi/informixdbservice), see [docs/MIGRATION.md](docs/MIGRATION.md) for the migration guide. The old service is deprecated and will no longer receive updates.
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Design, protocol, connection pooling, metrics |
+| [CLIENTS](docs/CLIENTS.md) | Node.js and Python client library usage |
+| [DEPLOYMENT](docs/DEPLOYMENT.md) | Docker Compose, ports, env vars, volumes |
+| [DEVELOPMENT](docs/DEVELOPMENT.md) | Building from source, IDE setup, adding RPCs |
+| [MONITORING](docs/MONITORING.md) | Prometheus, Grafana dashboards, alerting, Loki |
+| [MIGRATION](docs/MIGRATION.md) | Migrating from the deprecated `informixdbservice` |
+| [CONTRIBUTING](CONTRIBUTING.md) | Branch strategy, commit conventions, workflow |
+| [CHANGELOG](CHANGELOG.md) | Version history |
+| [ROADMAP](docs/ROADMAP.md) | Planned improvements |
+
 ## Project structure
 
 ```
 src/main/java/       Java gRPC proxy server (single class)
 src/main/proto/      Protocol Buffer service definition
-clients/nodejs/      Node.js gRPC client library and test
+clients/nodejs/      Node.js gRPC client library and tests
 clients/python/      Python gRPC client library
 scripts/             Database init script, setup helpers
 monitoring/          Prometheus, Grafana, Alertmanager, Loki configs
