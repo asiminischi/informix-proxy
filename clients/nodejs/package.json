@@ -4,7 +4,8 @@
   "description": "Node.js client for Informix gRPC Proxy",
   "main": "informix-client.js",
   "scripts": {
-    "test": "node informix-client.js"
+    "test": "node test-client.js",
+    "start": "node informix-client.js"
   },
   "keywords": [
     "informix",
@@ -14,11 +15,10 @@
   ],
   "dependencies": {
     "@grpc/grpc-js": "^1.9.14",
-    "@grpc/proto-loader": "^0.7.10"
-  },
-  "devDependencies": {
+    "@grpc/proto-loader": "^0.7.10",
     "dotenv": "^16.3.1"
   },
+  "devDependencies": {},
   "engines": {
     "node": ">=14.0.0"
   },
