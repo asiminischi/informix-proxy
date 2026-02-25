@@ -3,34 +3,34 @@
 services:
   #############################################################################
   # INFORMIX TEST DATABASE
-  #############################################################################
-  informix-db:
-    image: ibmcom/informix-developer-database:latest
-    container_name: informix-test-db
-    privileged: true
-    environment:
-      - LICENSE=accept
-      - SIZE=small
-      - DB_INIT=1
-      - INFORMIXSERVER=${INFORMIX_SERVER:-informix}
-    ports:
-      - "${INFORMIX_PORT:-9088}:9088"   # Informix SQLI protocol
-      - "9089:9089"     # Informix Mongo API
-      - "27017:27017"   # MongoDB wire protocol
-      - "27018:27018"   # REST API
-      - "27883:27883"   # MQTT
-    volumes:
-      - informix-data:/opt/ibm/data
-      - ./scripts/init-db.sh:/opt/ibm/init/init-db.sh
-    healthcheck:
-      test: ["CMD-SHELL", "export INFORMIXDIR=/opt/ibm/informix INFORMIXSERVER=informix ONCONFIG=onconfig; /opt/ibm/informix/bin/onstat - 2>/dev/null | grep -q 'On-Line' || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 20
-      start_period: 60s
-    networks:
-      - informix-network
-    restart: unless-stopped
+  # #############################################################################
+  # informix-db:
+  #   image: ibmcom/informix-developer-database:latest
+  #   container_name: informix-test-db
+  #   privileged: true
+  #   environment:
+  #     - LICENSE=accept
+  #     - SIZE=small
+  #     - DB_INIT=1
+  #     - INFORMIXSERVER=${INFORMIX_SERVER:-informix}
+  #   ports:
+  #     - "${INFORMIX_PORT:-9088}:9088"   # Informix SQLI protocol
+  #     - "9089:9089"     # Informix Mongo API
+  #     - "27017:27017"   # MongoDB wire protocol
+  #     - "27018:27018"   # REST API
+  #     - "27883:27883"   # MQTT
+  #   volumes:
+  #     - informix-data:/opt/ibm/data
+  #     - ./scripts/init-db.sh:/opt/ibm/init/init-db.sh
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "export INFORMIXDIR=/opt/ibm/informix INFORMIXSERVER=informix ONCONFIG=onconfig; /opt/ibm/informix/bin/onstat - 2>/dev/null | grep -q 'On-Line' || exit 1"]
+  #     interval: 15s
+  #     timeout: 10s
+  #     retries: 20
+  #     start_period: 60s
+  #   networks:
+  #     - informix-network
+  #   restart: unless-stopped
 
   #############################################################################
   # INFORMIX gRPC PROXY (with Prometheus metrics)
@@ -86,116 +86,116 @@ services:
   #############################################################################
   # PROMETHEUS - Metrics Collection
   #############################################################################
-  prometheus:
-    image: prom/prometheus:v2.48.1
-    container_name: informix-prometheus
-    ports:
-      - "9091:9090"  # Using 9091 to avoid conflict with proxy metrics port
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml
-      - prometheus-data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--web.enable-lifecycle'
-    networks:
-      - informix-network
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 1G
+  # prometheus:
+  #   image: prom/prometheus:v2.48.1
+  #   container_name: informix-prometheus
+  #   ports:
+  #     - "9091:9090"  # Using 9091 to avoid conflict with proxy metrics port
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml
+  #     - prometheus-data:/prometheus
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #     - '--storage.tsdb.retention.time=30d'
+  #     - '--web.console.libraries=/etc/prometheus/console_libraries'
+  #     - '--web.console.templates=/etc/prometheus/consoles'
+  #     - '--web.enable-lifecycle'
+  #   networks:
+  #     - informix-network
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 1G
 
   #############################################################################
   # GRAFANA - Metrics Visualization
   #############################################################################
-  grafana:
-    image: grafana/grafana:10.2.3
-    container_name: informix-grafana
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=http://localhost:3000
-      - GF_INSTALL_PLUGINS=grafana-piechart-panel
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
-    depends_on:
-      - prometheus
-    networks:
-      - informix-network
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 512M
+  # grafana:
+  #   image: grafana/grafana:10.2.3
+  #   container_name: informix-grafana
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
+  #     - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
+  #     - GF_USERS_ALLOW_SIGN_UP=false
+  #     - GF_SERVER_ROOT_URL=http://localhost:3000
+  #     - GF_INSTALL_PLUGINS=grafana-piechart-panel
+  #   volumes:
+  #     - grafana-data:/var/lib/grafana
+  #     - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+  #     - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+  #   depends_on:
+  #     - prometheus
+  #   networks:
+  #     - informix-network
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 512M
 
   #############################################################################
   # ALERTMANAGER - Alert Routing
   #############################################################################
-  alertmanager:
-    image: prom/alertmanager:v0.26.0
-    container_name: informix-alertmanager
-    ports:
-      - "9093:9093"
-    volumes:
-      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
-      - alertmanager-data:/alertmanager
-    command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
-      - '--storage.path=/alertmanager'
-    networks:
-      - informix-network
-    restart: unless-stopped
+  # alertmanager:
+  #   image: prom/alertmanager:v0.26.0
+  #   container_name: informix-alertmanager
+  #   ports:
+  #     - "9093:9093"
+  #   volumes:
+  #     - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+  #     - alertmanager-data:/alertmanager
+  #   command:
+  #     - '--config.file=/etc/alertmanager/alertmanager.yml'
+  #     - '--storage.path=/alertmanager'
+  #   networks:
+  #     - informix-network
+  #   restart: unless-stopped
 
   #############################################################################
   # NODE EXPORTER - System Metrics
   #############################################################################
-  node-exporter:
-    image: prom/node-exporter:v1.7.0
-    container_name: informix-node-exporter
-    ports:
-      - "9100:9100"
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    networks:
-      - informix-network
-    restart: unless-stopped
+  # node-exporter:
+  #   image: prom/node-exporter:v1.7.0
+  #   container_name: informix-node-exporter
+  #   ports:
+  #     - "9100:9100"
+  #   command:
+  #     - '--path.procfs=/host/proc'
+  #     - '--path.sysfs=/host/sys'
+  #     - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+  #   volumes:
+  #     - /proc:/host/proc:ro
+  #     - /sys:/host/sys:ro
+  #     - /:/rootfs:ro
+  #   networks:
+  #     - informix-network
+  #   restart: unless-stopped
 
   #############################################################################
   # CADVISOR - Container Metrics
   #############################################################################
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.47.2
-    container_name: informix-cadvisor
-    ports:
-      - "8080:8080"
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-    privileged: true
-    devices:
-      - /dev/kmsg
-    networks:
-      - informix-network
-    restart: unless-stopped
+  # cadvisor:
+  #   image: gcr.io/cadvisor/cadvisor:v0.47.2
+  #   container_name: informix-cadvisor
+  #   ports:
+  #     - "8080:8080"
+  #   volumes:
+  #     - /:/rootfs:ro
+  #     - /var/run:/var/run:ro
+  #     - /sys:/sys:ro
+  #     - /var/lib/docker/:/var/lib/docker:ro
+  #     - /dev/disk/:/dev/disk:ro
+  #   privileged: true
+  #   devices:
+  #     - /dev/kmsg
+  #   networks:
+  #     - informix-network
+  #   restart: unless-stopped
 
   #############################################################################
   # LOKI - Log Aggregation
@@ -239,11 +239,11 @@ networks:
 volumes:
   informix-data:
     driver: local
-  prometheus-data:
-    driver: local
-  grafana-data:
-    driver: local
-  alertmanager-data:
-    driver: local
-  loki-data:
-    driver: local
+  # prometheus-data:
+  #   driver: local
+  # grafana-data:
+  #   driver: local
+  # alertmanager-data:
+  #   driver: local
+  # loki-data:
+  #   driver: local
