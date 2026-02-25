@@ -57,9 +57,9 @@ services:
       - POOL_MIN_IDLE=${POOL_MIN_IDLE:-5}
       - POOL_MAX_LIFETIME=${POOL_MAX_LIFETIME:-1800000}
       - CONNECTION_TIMEOUT=${CONNECTION_TIMEOUT:-30000}
-    depends_on:
-      informix-db:
-        condition: service_healthy
+    # depends_on:
+    #   informix-db:
+    #     condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/metrics > /dev/null || exit 1"]
       interval: 30s

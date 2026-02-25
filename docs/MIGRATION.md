@@ -21,8 +21,8 @@ This guide covers switching from the legacy [`informixdbservice`](https://github
 Add the `informix-proxy` service to your Docker Compose stack or deploy the Portainer stack (see [DEPLOYMENT.md](DEPLOYMENT.md)).
 
 The proxy listens on:
-- **Port 50051** — gRPC API (replaces the old REST endpoint)
-- **Port 9090** — Prometheus metrics
+- **Port 50051** - gRPC API (replaces the old REST endpoint)
+- **Port 9090** - Prometheus metrics
 
 ### 2. Install the client library
 
@@ -35,14 +35,14 @@ npm install @grpc/grpc-js @grpc/proto-loader
 **Python:**
 ```bash
 pip install grpcio grpcio-tools protobuf
-# Generate stubs — see docs/CLIENTS.md
+# Generate stubs - see docs/CLIENTS.md
 ```
 
 ### 3. Update your application code
 
 Replace HTTP calls to `informixdbservice` with gRPC calls through `InformixClient`.
 
-**Before (informixdbservice — REST):**
+**Before (informixdbservice - REST):**
 ```javascript
 const response = await fetch('http://informixdbservice:3000/query', {
     method: 'POST',
@@ -51,7 +51,7 @@ const response = await fetch('http://informixdbservice:3000/query', {
 const data = await response.json();
 ```
 
-**After (informix-proxy — gRPC):**
+**After (informix-proxy - gRPC):**
 ```javascript
 const InformixClient = require('./informix-client');
 
@@ -91,7 +91,7 @@ Once all consumers have migrated:
 
 1. Remove `informixdbservice` from your Docker Compose / Portainer stack
 2. Remove any direct JDBC or REST references to the old service
-3. Update firewall rules — close the old service port, ensure 50051 is reachable
+3. Update firewall rules - close the old service port, ensure 50051 is reachable
 
 ### 6. Verify
 
@@ -107,7 +107,7 @@ Check Grafana at `http://localhost:3000` for query metrics confirming traffic fl
 
 - **Connection lifecycle**: The old service was stateless (one request = one connection). The new proxy uses persistent connection pools. Call `connect()` once at startup and `disconnect()` on shutdown.
 - **Error handling**: Errors come back as gRPC status codes, not HTTP status codes. The client libraries throw standard errors with messages.
-- **Parameterized queries**: Use `?` placeholders and pass parameters as an array. The proxy uses JDBC prepared statements — no more string concatenation.
+- **Parameterized queries**: Use `?` placeholders and pass parameters as an array. The proxy uses JDBC prepared statements - no more string concatenation.
 - **Streaming**: For large result sets, use `queryStream()` to process rows incrementally instead of loading everything into memory.
 
 ## Timeline
