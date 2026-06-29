@@ -34,7 +34,7 @@ class InformixRunningStackTest {
     void shouldConnectPingQueryAndDisconnect() {
         // Connect (using the default credentials from your docker-compose)
         ConnectionResponse connResp = stub.connect(ConnectionRequest.newBuilder()
-                .setHost("informix-db")
+                .setHost(PROXY_HOST)
                 .setPort(9088)
                 .setDatabase("sysmaster")
                 .setUsername("informix")
