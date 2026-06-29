@@ -80,11 +80,12 @@ services:
     # Health check - wait for Informix to be fully online
     # Must set INFORMIXDIR/INFORMIXSERVER since health check runs outside the informix user env
     healthcheck:
-      test: ["CMD-SHELL", "export INFORMIXDIR=/opt/ibm/informix INFORMIXSERVER=informix ONCONFIG=onconfig; /opt/ibm/informix/bin/onstat - 2>/dev/null | grep -q 'On-Line' || exit 1"]
+      test: ["CMD-SHELL", "export INFORMIXDIR=/opt/ibm/informix INFORMIXSERVER=informix ONCONFIG=onconfig; /opt/ibm/informix/bin/onstat - | grep -q 'On-Line' || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 20
-      start_period: 60s  # First check after 60s, then every 15s
+      start_period: 60s
+
 
     networks:
       - informix-network
@@ -152,22 +153,24 @@ services:
       # Server configuration
       - GRPC_PORT=50051
       - METRICS_PORT=9090
-
+      
       # JVM tuning
       - JAVA_OPTS=-Xmx2g -Xms1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp
 
-      # Default Informix connection (can be overridden by clients)
-      - DEFAULT_INFORMIX_HOST=informix-db
-      - DEFAULT_INFORMIX_PORT=9088
-      - DEFAULT_INFORMIX_DB=testdb
-      - DEFAULT_INFORMIX_USER=informix
-      - DEFAULT_INFORMIX_PASS=in4mix
+      # New pool config
+      - POOL_MAX_SIZE=20
+      - POOL_MIN_IDLE=5
+      - POOL_CONNECTION_TIMEOUT_MS=30000
+      - POOL_IDLE_TIMEOUT_MS=600000
+      - POOL_MAX_LIFETIME_MS=1800000
+      - POOL_CONNECTION_TEST_QUERY=SELECT 1 FROM systables WHERE tabid = 1
 
-      # Connection pool defaults
-      - DEFAULT_POOL_SIZE=20
-      - DEFAULT_POOL_MIN_IDLE=5
-      - DEFAULT_POOL_MAX_LIFETIME=1800000
-      - DEFAULT_CONNECTION_TIMEOUT=30000
+      # Default Informix connection (can be overridden by clients)
+      # - DEFAULT_INFORMIX_HOST=informix-db
+      # - DEFAULT_INFORMIX_PORT=9088
+      # - DEFAULT_INFORMIX_DB=testdb
+      # - DEFAULT_INFORMIX_USER=informix
+      # - DEFAULT_INFORMIX_PASS=in4mix
 
     depends_on:
       informix-db:
