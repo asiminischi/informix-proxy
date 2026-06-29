@@ -12,7 +12,7 @@ class InformixRunningStackTest {
     private static ManagedChannel channel;
     private static InformixServiceGrpc.InformixServiceBlockingStub stub;
 
-    private static final String PROXY_HOST = "localhost";
+    private static final String PROXY_HOST = "127.0.0.1";
     private static final int PROXY_PORT = 50051;
 
     @BeforeAll

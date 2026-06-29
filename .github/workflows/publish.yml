@@ -57,7 +57,12 @@ jobs:
           echo "Waiting for proxy…"
           until docker ps | grep informix-proxy | grep -q 'healthy'; do sleep 2; done
 
-      # Run only the integration test (tagged accordingly)
+      # Debug in case of tiny surprises
+      - name: Print proxy logs (debug)
+        if: always()
+        run: docker logs informix-proxy
+      
+        # Run only the integration test (tagged accordingly)
       - name: Integration tests
         run: mvn test -Dgroups="integration" -B
 
