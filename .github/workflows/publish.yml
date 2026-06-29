@@ -165,24 +165,24 @@ jobs:
           echo "image: ghcr.io/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-    deploy:
-      name: Deploy to Production
-      needs: build-and-push
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      runs-on: ubuntu-latest
-      environment:
-        name: production
-        url: https://your-domain.com          # change to your actual service URL
+  deploy:
+    name: Deploy to Production
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://your-domain.com          # change to your actual service URL
 
-      steps:
-        - name: Deploy via SSH
-          uses: appleboy/ssh-action@v1.2.0
-          with:
-            host: ${{ secrets.PROD_HOST }}
-            username: ${{ secrets.PROD_USER }}
-            key: ${{ secrets.PROD_SSH_KEY }}
-            script: |
-              cd /opt/informix-proxy
-              docker compose pull informix-proxy
-              docker compose up -d --remove-orphans
-              docker image prune -f
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /opt/informix-proxy
+            docker compose pull informix-proxy
+            docker compose up -d --remove-orphans
+            docker image prune -f
