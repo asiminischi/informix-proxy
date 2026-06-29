@@ -27,7 +27,6 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # Unit & integration tests 
   test:
     name: Test (Unit + Integration)
     runs-on: ubuntu-latest
@@ -41,37 +40,41 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # Fast unit tests 
+      # Build the fat JAR so we can run the proxy from the command line
+      - name: Package application
+        run: mvn package -DskipTests -B
+
+      # Fast unit tests (no Docker needed)
       - name: Unit tests
-        run: mvn test -B
+        run: mvn test -B -Dgroups='!integration'
 
-      # Spin up the services needed for integration tests
-      - name: Start Informix + proxy stack
-        run: docker compose up -d informix-db informix-proxy
-
-      # Wait for both containers to become healthy
-      - name: Wait for services
+      # Start only the Informix database (not the proxy)
+      - name: Start Informix
         run: |
+          docker compose up -d informix-db
+          # Wait for Informix to be healthy
           echo "Waiting for Informix…"
           until docker ps | grep informix-db | grep -q 'healthy'; do sleep 2; done
-          echo "Waiting for proxy…"
-          until docker ps | grep informix-proxy | grep -q 'healthy'; do sleep 2; done
 
-      # Debug in case of tiny surprises
-      - name: Print proxy logs (debug)
-        if: always()
-        run: docker logs informix-proxy
-      
-        # Run only the integration test (tagged accordingly)
+      # Run the proxy JAR in the background, listening on 50051
+      - name: Start proxy
+        run: |
+          java -jar target/informix-grpc-proxy-*.jar &
+          # Give it a moment to start
+          sleep 5
+          # Verify it's listening
+          curl -sf http://localhost:8080/healthz || { echo "Proxy health check failed"; exit 1; }
+
       - name: Integration tests
         run: mvn test -Dgroups="integration" -B
 
-      # (Optional) Tear down the stack
+      # Cleanup
       - name: Stop services
         if: always()
-        run: docker compose down
+        run: |
+          docker compose down
+          pkill -f 'informix-grpc-proxy' || true
 
-  # Build & publish
   build-and-push:
     name: Build & Push
     needs: test
