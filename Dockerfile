@@ -5,7 +5,7 @@
 # =============================================================================
 
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM maven:3.9-eclipse-temurin-11 AS builder
+FROM docker.io/library/maven:3.9-eclipse-temurin-11 AS builder
 
 WORKDIR /app
 
@@ -43,7 +43,7 @@ RUN apt-get update \
      esac \
   && curl -fsSL \
        "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_${TARGETOS}_${GRPC_ARCH}.tar.gz" \
-     | tar -xz -C /usr/local/bin grpcurl \
+     | tar -xz --no-same-owner -C /usr/local/bin grpcurl \
   && chmod +x /usr/local/bin/grpcurl \
   && apt-get purge -y curl \
   && apt-get autoremove -y \
