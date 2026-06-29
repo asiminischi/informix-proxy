@@ -1,15 +1,16 @@
-name: Build & Publish — informix-proxy
+name: CI / Build & Publish - informix-proxy
 
 on:
   push:
     branches: [master]
     paths:
-      # Only rebuild when something that affects the image changes
       - "src/**"
       - "Dockerfile"
       - "pom.xml"
       - ".github/workflows/publish.yml"
-  # Allow manual trigger for emergency rebuilds
+      - "docker-compose.yml"
+  pull_request:
+    branches: [master]
   workflow_dispatch:
     inputs:
       push:
@@ -18,28 +19,68 @@ on:
         default: true
 
 concurrency:
-  group: informix-proxy-build
-  cancel-in-progress: true   # A new push supersedes an in-progress build
+  group: informix-proxy-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}   # asiminischi/informix-proxy
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Unit & integration tests 
+  test:
+    name: Test (Unit + Integration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # Fast unit tests 
+      - name: Unit tests
+        run: mvn test -B
+
+      # Spin up the services needed for integration tests
+      - name: Start Informix + proxy stack
+        run: docker compose up -d informix-db informix-proxy
+
+      # Wait for both containers to become healthy
+      - name: Wait for services
+        run: |
+          echo "Waiting for Informix…"
+          until docker ps | grep informix-db | grep -q 'healthy'; do sleep 2; done
+          echo "Waiting for proxy…"
+          until docker ps | grep informix-proxy | grep -q 'healthy'; do sleep 2; done
+
+      # Run only the integration test (tagged accordingly)
+      - name: Integration tests
+        run: mvn test -Dgroups="integration" -B
+
+      # (Optional) Tear down the stack
+      - name: Stop services
+        if: always()
+        run: docker compose down
+
+  # Build & publish
   build-and-push:
     name: Build & Push
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-      # Required for signing the image with Cosign
       id-token: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Set up QEMU for multi-platform builds (linux/amd64 + linux/arm64)
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -59,12 +100,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Immutable SHA tag — what docker-compose.yml should pin to
             type=sha,format=short
-            # Semver tags if you push a git tag like v1.2.3
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # Mutable latest tag on master
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=informix-proxy
@@ -81,31 +119,25 @@ jobs:
           push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # GitHub Actions cache backend — speeds up repeated builds significantly
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Supply-chain: generate SBOM and provenance attestations
           provenance: true
           sbom: true
 
-      # Install Cosign for image signing
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
 
-      # Sign the image digest with keyless signing (Sigstore/Fulcio)
-      # This ties the image to this specific GitHub Actions run — verifiable by anyone
       - name: Sign image
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          echo "${TAGS}" | xargs -I {} cosign sign --yes \
-            "{}@${DIGEST}"
+          echo "${TAGS}" | xargs -I {} cosign sign --yes "{}@${DIGEST}"
 
       - name: Summary
         run: |
-          echo "### 🐳 informix-proxy image published" >> $GITHUB_STEP_SUMMARY
+          echo "### Yippie 🐳 informix-proxy image published" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| | |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
