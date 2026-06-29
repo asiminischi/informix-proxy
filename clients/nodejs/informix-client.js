@@ -25,13 +25,20 @@ class InformixClient {
 
     async connect(config) {
         return new Promise((resolve, reject) => {
+            // Merge explicit properties with INFORMIXSERVER so the JDBC
+            // URL built by the proxy includes the server name.
+            const properties = Object.assign({}, config.properties || {});
+            if (config.server) {
+                properties['INFORMIXSERVER'] = config.server;
+            }
+
             const request = {
                 host: config.host,
                 port: config.port,
                 database: config.database,
                 username: config.username,
                 password: config.password,
-                properties: config.properties || {},
+                properties: properties,
                 pool_size: config.poolSize || 10
             };
 
@@ -256,6 +263,7 @@ async function example() {
         const connInfo = await client.connect({
             host: 'informix-db',
             port: 9088,
+            server: 'informix',       // INFORMIXSERVER name
             database: 'testdb',
             username: 'informix',
             password: 'in4mix',

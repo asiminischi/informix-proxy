@@ -1,0 +1,188 @@
+name: CI / Build & Publish - informix-proxy
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "Dockerfile"
+      - "pom.xml"
+      - ".github/workflows/publish.yml"
+      - "docker-compose.yml"
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push image to GHCR?"
+        type: boolean
+        default: true
+      deploy:
+        description: "Deploy to prod?"
+        type: boolean
+        default: false
+
+concurrency:
+  group: informix-proxy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    name: Test (Unit + Integration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # Build the fat JAR so we can run the proxy from the command line
+      - name: Package application
+        run: mvn package -DskipTests -B
+
+      # Fast unit tests (no Docker needed)
+      - name: Unit tests
+        run: mvn test -B -Dgroups='!integration'
+
+      # Start only the Informix database (not the proxy)
+      - name: Start Informix
+        run: |
+          docker compose up -d informix-db
+          # Wait for Informix to be healthy
+          echo "Waiting for Informix…"
+          until docker ps | grep informix-db | grep -q 'healthy'; do sleep 2; done
+
+      # Run the proxy JAR in the background, listening on 50051
+      - name: Start proxy
+        run: |
+          java -jar target/informix-grpc-proxy-*.jar &
+          # Give it a moment to start
+          sleep 5
+          # Verify it's listening
+          curl -sf http://localhost:8080/healthz || { echo "Proxy health check failed"; exit 1; }
+
+      - name: Integration tests
+        run: mvn test -Dgroups="integration" -B
+
+      # Cleanup
+      - name: Stop services
+        if: always()
+        run: |
+          docker compose down
+          pkill -f 'informix-grpc-proxy' || true
+
+  build-and-push:
+    name: Build & Push
+    needs: test
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=informix-proxy
+            org.opencontainers.image.description=Production-grade gRPC proxy for Informix databases
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          echo "${TAGS}" | xargs -I {} cosign sign --yes "{}@${DIGEST}"
+
+      - name: Summary
+        run: |
+          echo "### Yippie 🐳 informix-proxy image published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Digest** | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Platforms** | \`linux/amd64\`, \`linux/arm64\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags pushed:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pin this exact build in docker-compose.yml:**" >> $GITHUB_STEP_SUMMARY
+          echo '```yaml' >> $GITHUB_STEP_SUMMARY
+          echo "image: ghcr.io/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy to Production
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://your-domain.com          # change to your actual service URL
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /opt/informix-proxy
+            docker compose pull informix-proxy
+            docker compose up -d --remove-orphans
+            docker image prune -f
