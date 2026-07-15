@@ -32,12 +32,27 @@ public class PreparedStatementService {
             if (ds == null) throw new SQLException("Connection not found");
 
             Connection conn = ds.getConnection();
-            PreparedStatement pstmt = conn.prepareStatement(request.getSql());
-            String statementId = stmtCache.put(pstmt);
+            PreparedStatement pstmt;
+            int parameterCount;
+            try {
+                pstmt = conn.prepareStatement(request.getSql());
+                parameterCount = pstmt.getParameterMetaData().getParameterCount();
+            } catch (Exception e) {
+                // Nothing has been cached yet, so this connection would
+                // otherwise never be returned to the pool.
+                try { conn.close(); } catch (Exception ignored) {}
+                throw e;
+            }
+
+            // Only cache once every fallible step above has succeeded - if we
+            // cached earlier and a later step failed, the statement id would
+            // never reach the client and the cached statement+connection
+            // would leak forever.
+            String statementId = stmtCache.put(request.getConnectionId(), pstmt);
 
             PrepareResponse response = PrepareResponse.newBuilder()
                     .setStatementId(statementId)
-                    .setParameterCount(pstmt.getParameterMetaData().getParameterCount())
+                    .setParameterCount(parameterCount)
                     .build();
 
             metrics.recordGrpcRequest("PrepareStatement", "ok");

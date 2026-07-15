@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.informix.grpc.*;
+import com.informix.grpc.cache.PreparedStatementCache;
 import com.informix.grpc.metrics.GrpcMetrics;
 import com.informix.grpc.pool.PoolManager;
 import com.zaxxer.hikari.HikariDataSource;
@@ -12,6 +13,7 @@ import io.prometheus.client.Histogram;
 
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.SQLException;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +28,8 @@ class ConnectionServiceTest {
 
     @Mock PoolManager poolManager;
     @Mock GrpcMetrics metrics;
+    @Mock PreparedStatementCache stmtCache;
+    @Mock TransactionService transactionService;
     @Mock StreamObserver<ConnectionResponse> connectionObserver;
     @Mock StreamObserver<DisconnectResponse> disconnectObserver;
     @Mock StreamObserver<PingResponse> pingObserver;
@@ -38,7 +42,7 @@ class ConnectionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ConnectionService(poolManager, metrics);
+        service = new ConnectionService(poolManager, metrics, stmtCache, transactionService);
         when(metrics.startGrpcTimer(any())).thenReturn(timer);
     }
 
@@ -86,6 +90,28 @@ class ConnectionServiceTest {
     }
 
     @Test
+    void connectShouldRemovePoolWhenVersionFetchFails() throws Exception {
+        // Regression test: if the version-fetch step after pool creation
+        // fails, the pool must not be left registered under an id the client
+        // never received - otherwise it leaks for the life of the JVM.
+        ConnectionRequest req = validRequest();
+        HikariDataSource mockDs = mock(HikariDataSource.class);
+
+        when(poolManager.createPool(req)).thenReturn("conn_1");
+        when(poolManager.getPool("conn_1")).thenReturn(mockDs);
+        when(mockDs.getConnection()).thenThrow(new SQLException("connection reset"));
+
+        service.connect(req, connectionObserver);
+
+        verify(poolManager).removePool("conn_1");
+        verify(metrics).incActiveConnections();
+        verify(metrics).decActiveConnections();
+        verify(metrics).recordGrpcRequest("Connect", "error");
+        verify(connectionObserver).onNext(connectionCaptor.capture());
+        assertThat(connectionCaptor.getValue().getSuccess()).isFalse();
+    }
+
+    @Test
     void disconnectShouldRemovePoolAndDecrementMetric() {
         DisconnectRequest req = DisconnectRequest.newBuilder().setConnectionId("conn_1").build();
 
@@ -97,6 +123,21 @@ class ConnectionServiceTest {
         verify(disconnectObserver).onNext(disconnectCaptor.capture());
         assertThat(disconnectCaptor.getValue().getSuccess()).isTrue();
         verify(disconnectObserver).onCompleted();
+    }
+
+    @Test
+    void disconnectShouldCleanUpActiveTransactionAndPreparedStatements() {
+        // Regression test: without this cleanup, a client that begins a
+        // transaction or prepares statements and then disconnects without
+        // explicitly closing them would leak those entries and their JDBC
+        // connections for the life of the JVM.
+        DisconnectRequest req = DisconnectRequest.newBuilder().setConnectionId("conn_1").build();
+
+        service.disconnect(req, disconnectObserver);
+
+        verify(transactionService).discardActiveConnection("conn_1");
+        verify(stmtCache).removeAllForConnection("conn_1");
+        verify(poolManager).removePool("conn_1");
     }
 
     @Test

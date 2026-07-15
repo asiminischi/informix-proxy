@@ -62,11 +62,16 @@ The proxy reads these from docker-compose.yml:
 | GRPC_PORT | 50051 | gRPC server listen port |
 | METRICS_PORT | 9090 | Prometheus metrics HTTP port |
 | JAVA_OPTS | -Xmx512m -Xms256m | JVM arguments |
-| DEFAULT_INFORMIX_HOST | informix-db | Default Informix host |
-| DEFAULT_INFORMIX_PORT | 9088 | Default Informix port |
-| DEFAULT_INFORMIX_DB | testdb | Default database name |
-| DEFAULT_INFORMIX_USER | informix | Default username |
-| DEFAULT_INFORMIX_PASS | in4mix | Default password |
+| POOL_MAX_SIZE | 20 | Max JDBC connections per client pool |
+| POOL_MIN_IDLE | 5 | Min idle JDBC connections per client pool |
+| POOL_CONNECTION_TIMEOUT_MS | 30000 | Time to wait for a pooled connection |
+| POOL_IDLE_TIMEOUT_MS | 600000 | Time an idle connection may sit before eviction |
+| POOL_MAX_LIFETIME_MS | 1800000 | Max lifetime of a pooled connection |
+
+The proxy holds no Informix host or credentials of its own - each client
+supplies host/port/database/username/password in the `Connect` RPC, and the
+proxy opens a connection pool for that client on demand. This means there is
+nothing database-credential-shaped to configure or rotate at the proxy level.
 
 ## Container resources
 

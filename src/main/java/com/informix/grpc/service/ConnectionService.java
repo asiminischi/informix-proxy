@@ -1,6 +1,7 @@
 package com.informix.grpc.service;
 
 import com.informix.grpc.*;
+import com.informix.grpc.cache.PreparedStatementCache;
 import com.informix.grpc.metrics.GrpcMetrics;
 import com.informix.grpc.pool.PoolManager;
 import com.zaxxer.hikari.HikariDataSource;
@@ -13,20 +14,26 @@ public class ConnectionService {
 
     private final PoolManager poolManager;
     private final GrpcMetrics metrics;
+    private final PreparedStatementCache stmtCache;
+    private final TransactionService transactionService;
 
-    public ConnectionService(PoolManager poolManager, GrpcMetrics metrics) {
+    public ConnectionService(PoolManager poolManager, GrpcMetrics metrics,
+                              PreparedStatementCache stmtCache, TransactionService transactionService) {
         this.poolManager = poolManager;
         this.metrics = metrics;
+        this.stmtCache = stmtCache;
+        this.transactionService = transactionService;
     }
 
     public void connect(ConnectionRequest request, StreamObserver<ConnectionResponse> responseObserver) {
         var timer = metrics.startGrpcTimer("Connect");
+        String connectionId = null;
         try {
-            String connectionId = poolManager.createPool(request);
+            connectionId = poolManager.createPool(request);
             metrics.incActiveConnections();
 
             // Retrieve server version from the new pool
-            String version = "Unknown";
+            String version;
             try (Connection conn = poolManager.getPool(connectionId).getConnection()) {
                 DatabaseMetaData meta = conn.getMetaData();
                 version = meta.getDatabaseProductName() + " " + meta.getDatabaseProductVersion();
@@ -42,6 +49,13 @@ public class ConnectionService {
             responseObserver.onNext(response);
             responseObserver.onCompleted();
         } catch (Exception e) {
+            if (connectionId != null) {
+                // The pool was created and registered, but we failed before the
+                // client ever learned its id - without this it would leak for
+                // the lifetime of the JVM since nothing could ever Disconnect it.
+                poolManager.removePool(connectionId);
+                metrics.decActiveConnections();
+            }
             metrics.recordGrpcRequest("Connect", "error");
             String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             if (e.getCause() != null && e.getCause().getMessage() != null) {
@@ -61,7 +75,14 @@ public class ConnectionService {
     public void disconnect(DisconnectRequest request, StreamObserver<DisconnectResponse> responseObserver) {
         var timer = metrics.startGrpcTimer("Disconnect");
         try {
-            poolManager.removePool(request.getConnectionId());
+            String connectionId = request.getConnectionId();
+            // Clean up anything a misbehaving/crashed client left open on this
+            // connection before tearing down the pool, otherwise the active
+            // transaction connection and any prepared statements become
+            // unreachable and leak for the lifetime of the JVM.
+            transactionService.discardActiveConnection(connectionId);
+            stmtCache.removeAllForConnection(connectionId);
+            poolManager.removePool(connectionId);
             metrics.decActiveConnections();
             metrics.recordGrpcRequest("Disconnect", "ok");
             responseObserver.onNext(DisconnectResponse.newBuilder().setSuccess(true).build());

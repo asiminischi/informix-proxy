@@ -56,9 +56,9 @@ class PreparedStatementServiceTest {
         when(poolManager.getPool("c1")).thenReturn(ds);
         when(ds.getConnection()).thenReturn(conn);
         when(conn.prepareStatement("SELECT ?")).thenReturn(pstmt);
-        when(stmtCache.put(pstmt)).thenReturn("stmt_1");
         when(pstmt.getParameterMetaData()).thenReturn(paramMeta);
         when(paramMeta.getParameterCount()).thenReturn(1);
+        when(stmtCache.put("c1", pstmt)).thenReturn("stmt_1");
 
         service.prepareStatement(req, prepareObserver);
 
@@ -67,6 +67,31 @@ class PreparedStatementServiceTest {
         PrepareResponse resp = prepareCaptor.getValue();
         assertThat(resp.getStatementId()).isEqualTo("stmt_1");
         assertThat(resp.getParameterCount()).isEqualTo(1);
+    }
+
+    @Test
+    void prepareShouldCloseConnectionAndSkipCachingWhenSetupFails() throws Exception {
+        // Regression test: if a fallible setup step (here, reading parameter
+        // metadata) throws after the statement was already prepared, the
+        // connection must still be closed and the statement must never be
+        // cached under an id the client will never receive - otherwise both
+        // leak for the life of the JVM.
+        PrepareRequest req = PrepareRequest.newBuilder().setConnectionId("c1").setSql("SELECT ?").build();
+        HikariDataSource ds = mock(HikariDataSource.class);
+        Connection conn = mock(Connection.class);
+        PreparedStatement pstmt = mock(PreparedStatement.class);
+
+        when(poolManager.getPool("c1")).thenReturn(ds);
+        when(ds.getConnection()).thenReturn(conn);
+        when(conn.prepareStatement("SELECT ?")).thenReturn(pstmt);
+        when(pstmt.getParameterMetaData()).thenThrow(new SQLException("driver error"));
+
+        service.prepareStatement(req, prepareObserver);
+
+        verify(conn).close();
+        verify(stmtCache, never()).put(any(), any());
+        verify(metrics).recordGrpcRequest("PrepareStatement", "error");
+        verify(prepareObserver).onNext(argThat(r -> r.getError().contains("driver error")));
     }
 
     @Test

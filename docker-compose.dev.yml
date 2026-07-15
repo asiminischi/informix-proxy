@@ -12,16 +12,16 @@ services:
       - GRPC_PORT=${GRPC_PORT:-50051}
       - METRICS_PORT=${METRICS_PORT:-9090}
       - JAVA_OPTS=${JAVA_OPTS:--Xmx512m -Xms256m}
-      - INFORMIX_HOST=${INFORMIX_HOST:-informix-db-dev}
-      - INFORMIX_PORT=${INFORMIX_PORT:-9088}
-      - INFORMIX_SERVER=${INFORMIX_SERVER:-informix}
-      - INFORMIX_DB=${INFORMIX_DB:-testdb}
-      - INFORMIX_USER=${INFORMIX_USER:-informix}
-      - INFORMIX_PASSWORD=${INFORMIX_PASSWORD:-in4mix}
-      - POOL_SIZE=${POOL_SIZE:-10}
+      # No Informix host/credentials here on purpose: the proxy is
+      # database-agnostic. Each client supplies host/port/database/username/
+      # password itself in the Connect RPC, so the proxy never needs to hold
+      # database credentials. See informix-db-dev below for the local test
+      # database's own admin credentials, which are unrelated to the proxy.
+      - POOL_MAX_SIZE=${POOL_MAX_SIZE:-10}
       - POOL_MIN_IDLE=${POOL_MIN_IDLE:-2}
-      - POOL_MAX_LIFETIME=${POOL_MAX_LIFETIME:-1800000}
-      - CONNECTION_TIMEOUT=${CONNECTION_TIMEOUT:-30000}
+      - POOL_CONNECTION_TIMEOUT_MS=${POOL_CONNECTION_TIMEOUT_MS:-30000}
+      - POOL_IDLE_TIMEOUT_MS=${POOL_IDLE_TIMEOUT_MS:-600000}
+      - POOL_MAX_LIFETIME_MS=${POOL_MAX_LIFETIME_MS:-1800000}
     restart: unless-stopped
     logging:
       driver: "json-file"

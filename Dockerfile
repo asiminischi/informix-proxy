@@ -56,7 +56,7 @@ RUN groupadd --system proxygroup && useradd --system --gid proxygroup --no-creat
 USER proxygroup
 
 # Copy the fat JAR from the build stage
-COPY --from=builder --chown=proxygroup:proxygroup /app/target/informix-grpc-proxy-1.0.0.jar proxy.jar
+COPY --from=builder --chown=proxygroup:proxygroup /app/target/informix-grpc-proxy-1.1.0.jar proxy.jar
 
 # gRPC service port
 EXPOSE 50051

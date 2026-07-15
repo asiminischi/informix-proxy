@@ -113,6 +113,79 @@ class TransactionServiceTest {
     }
 
     @Test
+    void beginTransactionShouldCloseConnectionWhenSetupFails() throws Exception {
+        // Regression test: if setAutoCommit/setTransactionIsolation throws
+        // before the connection is registered, nothing else will ever close
+        // it - it would otherwise leak out of the pool.
+        TransactionRequest req = TransactionRequest.newBuilder()
+                .setConnectionId("c1").setIsolationLevel("SERIALIZABLE").build();
+        HikariDataSource ds = mock(HikariDataSource.class);
+        Connection conn = mock(Connection.class);
+        when(poolManager.getPool("c1")).thenReturn(ds);
+        when(ds.getConnection()).thenReturn(conn);
+        doThrow(new java.sql.SQLException("not supported"))
+                .when(conn).setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
+
+        service.beginTransaction(req, txObserver);
+
+        verify(conn).close();
+        assertThat(service.getActiveConnection("c1")).isNull();
+        verify(metrics).recordGrpcRequest("BeginTransaction", "error");
+    }
+
+    @Test
+    void commitShouldCloseConnectionEvenIfCommitFails() throws Exception {
+        // Regression test: a failing commit() must not leak the connection.
+        TransactionRequest req = TransactionRequest.newBuilder().setConnectionId("c1").build();
+        HikariDataSource ds = mock(HikariDataSource.class);
+        Connection conn = mock(Connection.class);
+        when(poolManager.getPool("c1")).thenReturn(ds);
+        when(ds.getConnection()).thenReturn(conn);
+        service.beginTransaction(req, txObserver);
+        doThrow(new java.sql.SQLException("commit failed")).when(conn).commit();
+
+        service.commit(CommitRequest.newBuilder().setConnectionId("c1").build(), commitObserver);
+
+        verify(conn).close();
+        verify(metrics).recordGrpcRequest("Commit", "error");
+    }
+
+    @Test
+    void rollbackShouldCloseConnectionEvenIfRollbackFails() throws Exception {
+        // Regression test: a failing rollback() must not leak the connection.
+        TransactionRequest req = TransactionRequest.newBuilder().setConnectionId("c1").build();
+        HikariDataSource ds = mock(HikariDataSource.class);
+        Connection conn = mock(Connection.class);
+        when(poolManager.getPool("c1")).thenReturn(ds);
+        when(ds.getConnection()).thenReturn(conn);
+        service.beginTransaction(req, txObserver);
+        doThrow(new java.sql.SQLException("rollback failed")).when(conn).rollback();
+
+        service.rollback(RollbackRequest.newBuilder().setConnectionId("c1").build(), rollbackObserver);
+
+        verify(conn).close();
+        verify(metrics).recordGrpcRequest("Rollback", "error");
+    }
+
+    @Test
+    void discardActiveConnectionShouldCloseAndRemoveConnection() throws Exception {
+        TransactionRequest req = TransactionRequest.newBuilder().setConnectionId("c1").build();
+        HikariDataSource ds = mock(HikariDataSource.class);
+        Connection conn = mock(Connection.class);
+        when(poolManager.getPool("c1")).thenReturn(ds);
+        when(ds.getConnection()).thenReturn(conn);
+        service.beginTransaction(req, txObserver);
+
+        service.discardActiveConnection("c1");
+
+        verify(conn).close();
+        assertThat(service.getActiveConnection("c1")).isNull();
+
+        // No-op (and no exception) when there is nothing to discard.
+        assertThatCode(() -> service.discardActiveConnection("missing")).doesNotThrowAnyException();
+    }
+
+    @Test
     void commitShouldFailIfNoActiveTransaction() {
         service.commit(CommitRequest.newBuilder().setConnectionId("c1").build(), commitObserver);
 

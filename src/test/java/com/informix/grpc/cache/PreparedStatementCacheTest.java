@@ -24,7 +24,7 @@ class PreparedStatementCacheTest {
 
     @Test
     void shouldStoreAndRetrieveStatement() {
-        String id = cache.put(stmt);
+        String id = cache.put("conn_1", stmt);
         assertThat(id).startsWith("stmt_");
         assertThat(cache.get(id)).isSameAs(stmt);
     }
@@ -36,7 +36,7 @@ class PreparedStatementCacheTest {
 
     @Test
     void shouldCloseStatementOnRemove() throws Exception {
-        String id = cache.put(stmt);
+        String id = cache.put("conn_1", stmt);
         cache.removeAndClose(id);
 
         verify(stmt).close();
@@ -46,12 +46,37 @@ class PreparedStatementCacheTest {
     @Test
     void shouldCloseAllStatements() throws Exception {
         PreparedStatement other = mock(PreparedStatement.class);
-        cache.put(stmt);
-        cache.put(other);
+        cache.put("conn_1", stmt);
+        cache.put("conn_2", other);
 
         cache.closeAll();
 
         verify(stmt).close();
         verify(other).close();
+    }
+
+    @Test
+    void shouldCloseAndRemoveOnlyStatementsForGivenConnection() throws Exception {
+        PreparedStatement otherConnStmt = mock(PreparedStatement.class);
+        String id1 = cache.put("conn_1", stmt);
+        String id2 = cache.put("conn_2", otherConnStmt);
+
+        cache.removeAllForConnection("conn_1");
+
+        verify(stmt).close();
+        verify(otherConnStmt, never()).close();
+        assertThat(cache.get(id1)).isNull();
+        assertThat(cache.get(id2)).isSameAs(otherConnStmt);
+    }
+
+    @Test
+    void shouldAlsoCloseUnderlyingConnectionOnRemove() throws Exception {
+        java.sql.Connection conn = mock(java.sql.Connection.class);
+        when(stmt.getConnection()).thenReturn(conn);
+
+        String id = cache.put("conn_1", stmt);
+        cache.removeAndClose(id);
+
+        verify(conn).close();
     }
 }
