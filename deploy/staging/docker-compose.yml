@@ -1,0 +1,75 @@
+# =============================================================================
+# informix-proxy - Standalone staging deployment
+#
+# Location on the staging box: /opt/informix-proxy/docker-compose.yml
+#
+# This is the target of publish.yml's "Deploy to Staging" job:
+#   cd /opt/informix-proxy && docker compose pull && docker compose up -d
+#
+# Unlike docker-compose.prod.yml (this repo's local/manual production
+# reference, which also has a "build:" fallback for convenience), this file
+# ONLY ever runs a pre-built image - INFORMIX_PROXY_IMAGE is set by the CI
+# deploy job to the exact digest that was scanned, signed, and cosign-verified
+# in that run. There is no build fallback: if the image isn't there, deploy
+# should fail loudly, not silently rebuild an unverified image on the staging
+# box.
+#
+# No ports are published to the host on purpose. presa-management's presa-app
+# reaches this proxy over the "informix_proxy_net" bridge network declared
+# below (by container name "informix-proxy"), not via a host port - see
+# docs/DEPLOYMENT.md "Staging deployment" for the full rationale. This
+# preserves presa-management's existing "ZERO external exposure" posture for
+# the gRPC port, which per docs/ROADMAP.md has no auth layer of its own.
+#
+# One-time bootstrap: this compose project must be brought up at least once
+# (creating informix_proxy_net) BEFORE presa-management's stack is deployed
+# with its informix-proxy service removed - see deploy/staging/README.md.
+# =============================================================================
+
+services:
+  informix-proxy:
+    image: ${INFORMIX_PROXY_IMAGE:?INFORMIX_PROXY_IMAGE must be set - see .env.example}
+    container_name: informix-proxy
+    restart: unless-stopped
+    environment:
+      - GRPC_PORT=${GRPC_PORT:-50051}
+      - METRICS_PORT=${METRICS_PORT:-9090}
+      - JAVA_OPTS=${JAVA_OPTS:--Xmx2g -Xms1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200}
+      # No Informix host/credentials here on purpose: the proxy is
+      # database-agnostic. Each client supplies host/port/database/username/
+      # password itself in the Connect RPC, so the proxy never needs to hold
+      # database credentials.
+      - POOL_MAX_SIZE=${POOL_MAX_SIZE:-20}
+      - POOL_MIN_IDLE=${POOL_MIN_IDLE:-5}
+      - POOL_CONNECTION_TIMEOUT_MS=${POOL_CONNECTION_TIMEOUT_MS:-30000}
+      - POOL_IDLE_TIMEOUT_MS=${POOL_IDLE_TIMEOUT_MS:-600000}
+      - POOL_MAX_LIFETIME_MS=${POOL_MAX_LIFETIME_MS:-1800000}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/metrics > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - informix_proxy_net
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+networks:
+  # Not external: this compose project is the one that creates it. It must
+  # be brought up first so presa-management's stack (which joins this same
+  # network as external: true) has something to attach to.
+  informix_proxy_net:
+    name: informix_proxy_net
+    driver: bridge
