@@ -135,9 +135,21 @@ as `external: true` and keeps reaching the proxy by container name
 presa-management's stack is redeployed with its co-located `informix-proxy`
 service removed - see `deploy/staging/README.md`.
 
-**Status as of 2026-07-29:**
-- Done: image owner path, CI hardening, this repo's `deploy/staging/` template, presa-management's side of the wiring (on a feature branch, not yet merged/deployed).
-- Still pending (needs hands-on access to the staging box, not done from this session): bootstrap `/opt/informix-proxy` for the first time, then merge and deploy presa-management's decoupling branch, then verify and remove the old co-located container.
+**Status as of 2026-07-29: cut over and live.** `/opt/informix-proxy` is
+bootstrapped and running independently; the old co-located container in
+presa-management's stack has been decommissioned; `presa-app` is confirmed
+reaching the new `informix-proxy` by name over `informix_proxy_net` with
+passing health checks. presa-management's compose/docs changes are in
+[PR #62](https://github.com/postarodiy/presa-management/pull/62) (not yet
+merged to `dev` - the live server already has the equivalent change applied
+directly, git just needs to catch up).
+
+The org's self-hosted runner group also had to be fixed: `stage@devops` is
+registered at the `postarodiy` org level, and its runner group's repository
+access list didn't include this repo (or, it turned out, presa-management
+either - likely reset by the 2026-07-29 runner rename), so `publish.yml`'s
+`deploy` job sat `queued` forever. Both repos have since been added to the
+runner group.
 
 ## Portainer
 
