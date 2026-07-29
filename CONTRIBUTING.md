@@ -2,21 +2,21 @@
 
 ## Branch strategy
 
+In practice this repo uses a simpler flow than a full `develop`/`feature/*` GitFlow: work happens directly on a `release/x.y.z` branch until it's ready to ship.
+
 | Branch | Purpose |
 |--------|---------|
-| `master` | Stable, release-ready code. Protected — merges via PR only. |
-| `develop` | Integration branch for features. PRs merge here first. |
-| `feature/*` | New features or improvements. Branch from `develop`. |
-| `bugfix/*` | Bug fixes. Branch from `develop` (or `master` for hotfixes). |
-| `release/*` | Release candidates. Branch from `develop`, merge to `master` + `develop`. |
+| `master` | Last released, stable code. Protected - merges via PR only. Updated when a `release/*` branch ships. |
+| `release/x.y.z` | Active line of work for the next version. Branch from `master`, commit directly (or via short-lived PRs), merge to `master` and tag when ready. |
+| `bugfix/*` | Bug fixes against a specific released version. Branch from `master` or the relevant `release/*`. |
 
 ## Workflow
 
-1. Create a feature branch from `develop`:
+1. Create or continue a release branch from `master`:
    ```
-   git checkout develop
+   git checkout master
    git pull
-   git checkout -b feature/my-feature
+   git checkout -b release/x.y.z
    ```
 
 2. Make changes, commit with clear messages:
@@ -24,14 +24,12 @@
    git commit -m "feat: add query timeout support"
    ```
 
-3. Push and open a PR against `develop`:
+3. Push the branch:
    ```
-   git push -u origin feature/my-feature
+   git push -u origin release/x.y.z
    ```
 
-4. After review and approval, squash-merge into `develop`.
-
-5. When `develop` is ready for release, create a `release/x.y.z` branch, finalize, then merge to `master` and tag.
+4. When the release is ready, merge `release/x.y.z` into `master` and tag it (`vX.Y.Z`), matching the entry added to `CHANGELOG.md`.
 
 ## Commit messages
 

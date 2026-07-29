@@ -1,7 +1,7 @@
 # =============================================================================
 # informix-proxy — Multi-stage Dockerfile
 # Stage 1: Build the fat JAR with Maven
-# Stage 2: Minimal JRE runtime with grpcurl for health checks
+# Stage 2: Minimal JRE runtime with a curl-based health check
 # =============================================================================
 
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
@@ -25,28 +25,15 @@ RUN mvn package -DskipTests -B \
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM eclipse-temurin:11-jre-jammy
 
-# grpcurl version to install — pin for reproducibility
-ARG GRPCURL_VERSION=1.9.1
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
-
-# Install grpcurl (used for health checks and manual debugging)
-# and clean up apt in the same layer to keep image size down
+# curl is required at runtime for the HEALTHCHECK below, and is what every
+# docker-compose file in this repo already uses for its own healthcheck
+# against the metrics endpoint. "apt-get upgrade" pulls in any OS package
+# security patches published after the base image was built (e.g. libssl3)
+# instead of shipping whatever was baked into eclipse-temurin:11-jre-jammy.
 RUN apt-get update \
+  && apt-get upgrade -y \
   && apt-get install -y --no-install-recommends curl ca-certificates \
-  && DEB_ARCH=$(dpkg --print-architecture) \
-  && case "${DEB_ARCH}" in \
-       amd64)   GRPC_ARCH="x86_64"  ;; \
-       arm64)   GRPC_ARCH="arm64"   ;; \
-       armhf)   GRPC_ARCH="armv7"   ;; \
-       *)       echo "Unsupported arch: ${DEB_ARCH}" && exit 1 ;; \
-     esac \
-  && curl -fsSL \
-       "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_${TARGETOS}_${GRPC_ARCH}.tar.gz" \
-     | tar -xz --no-same-owner -C /usr/local/bin grpcurl \
-  && chmod +x /usr/local/bin/grpcurl \
-  && apt-get purge -y curl \
-  && apt-get autoremove -y \
+  && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -56,7 +43,7 @@ RUN groupadd --system proxygroup && useradd --system --gid proxygroup --no-creat
 USER proxygroup
 
 # Copy the fat JAR from the build stage
-COPY --from=builder --chown=proxygroup:proxygroup /app/target/informix-grpc-proxy-1.0.0.jar proxy.jar
+COPY --from=builder --chown=proxygroup:proxygroup /app/target/informix-grpc-proxy-1.1.0.jar proxy.jar
 
 # gRPC service port
 EXPOSE 50051
@@ -66,11 +53,16 @@ EXPOSE 9090
 # JAVA_OPTS is honoured via the shell-form entrypoint below.
 # Override at runtime: docker run -e JAVA_OPTS="-Xmx1g" ...
 ENV GRPC_PORT=50051 \
+    METRICS_PORT=9090 \
     JAVA_OPTS="-Xmx512m -Xms256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp"
 
-# Health check via gRPC health protocol — same check docker-compose uses
+# Health check against the Prometheus metrics endpoint - the same check
+# every docker-compose file in this repo already uses. This used to shell
+# out to grpcurl instead, which dragged in ~28 CRITICAL/HIGH CVEs from its
+# embedded Go toolchain and dependencies (upstream hasn't cut a release
+# since March 2025) to run a check that compose always overrode anyway.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
-  CMD grpcurl -plaintext localhost:${GRPC_PORT} grpc.health.v1.Health/Check || exit 1
+  CMD curl -sf http://localhost:${METRICS_PORT}/metrics || exit 1
 
 # Shell form so $JAVA_OPTS is expanded at runtime
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/proxy.jar"]

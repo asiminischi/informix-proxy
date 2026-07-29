@@ -7,6 +7,7 @@ import io.grpc.stub.StreamObserver;
 import com.zaxxer.hikari.HikariDataSource;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -26,8 +27,13 @@ public class TransactionService {
         return activeConnections.get(connectionId);
     }
 
-    public void removeActiveConnection(String connectionId) {
-        activeConnections.remove(connectionId);
+    /**
+     * Drops and closes any transaction left open on this connection id, e.g.
+     * because the client disconnected without committing or rolling back.
+     */
+    public void discardActiveConnection(String connectionId) {
+        Connection conn = activeConnections.remove(connectionId);
+        closeQuietly(conn);
     }
 
     public void beginTransaction(TransactionRequest request, StreamObserver<TransactionResponse> responseObserver) {
@@ -38,16 +44,23 @@ public class TransactionService {
             if (ds == null) throw new RuntimeException("Connection not found");
 
             Connection conn = ds.getConnection();
-            conn.setAutoCommit(false);
+            try {
+                conn.setAutoCommit(false);
 
-            String isolation = request.getIsolationLevel();
-            if (isolation != null && !isolation.isEmpty()) {
-                switch (isolation) {
-                    case "READ_UNCOMMITTED": conn.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED); break;
-                    case "READ_COMMITTED":   conn.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED); break;
-                    case "REPEATABLE_READ":  conn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ); break;
-                    case "SERIALIZABLE":     conn.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE); break;
+                String isolation = request.getIsolationLevel();
+                if (isolation != null && !isolation.isEmpty()) {
+                    switch (isolation) {
+                        case "READ_UNCOMMITTED": conn.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED); break;
+                        case "READ_COMMITTED":   conn.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED); break;
+                        case "REPEATABLE_READ":  conn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ); break;
+                        case "SERIALIZABLE":     conn.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE); break;
+                    }
                 }
+            } catch (Exception e) {
+                // Setup failed before the connection was registered - nothing
+                // else will ever close it, so close it here.
+                closeQuietly(conn);
+                throw e;
             }
 
             activeConnections.put(request.getConnectionId(), conn);
@@ -70,9 +83,14 @@ public class TransactionService {
             Connection conn = activeConnections.remove(request.getConnectionId());
             if (conn == null) throw new RuntimeException("No active transaction");
 
-            conn.commit();
-            conn.setAutoCommit(true);
-            conn.close();
+            try {
+                conn.commit();
+                conn.setAutoCommit(true);
+            } finally {
+                // Always return the connection to the pool, even if commit
+                // itself failed - otherwise it leaks out of the pool forever.
+                closeQuietly(conn);
+            }
 
             metrics.recordGrpcRequest("Commit", "ok");
             responseObserver.onNext(CommitResponse.newBuilder().setSuccess(true).build());
@@ -93,9 +111,14 @@ public class TransactionService {
             Connection conn = activeConnections.remove(request.getConnectionId());
             if (conn == null) throw new RuntimeException("No active transaction");
 
-            conn.rollback();
-            conn.setAutoCommit(true);
-            conn.close();
+            try {
+                conn.rollback();
+                conn.setAutoCommit(true);
+            } finally {
+                // Always return the connection to the pool, even if rollback
+                // itself failed - otherwise it leaks out of the pool forever.
+                closeQuietly(conn);
+            }
 
             metrics.recordGrpcRequest("Rollback", "ok");
             responseObserver.onNext(RollbackResponse.newBuilder().setSuccess(true).build());
@@ -107,5 +130,10 @@ public class TransactionService {
         } finally {
             timer.observeDuration();
         }
+    }
+
+    private static void closeQuietly(Connection conn) {
+        if (conn == null) return;
+        try { conn.close(); } catch (SQLException ignored) {}
     }
 }

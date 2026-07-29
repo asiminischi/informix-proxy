@@ -38,10 +38,14 @@ public class PoolManager {
 
         HikariDataSource ds = new HikariDataSource(config);
 
-        // Validate immediately
+        // Validate immediately. If this fails, ds must be closed here - it is
+        // not registered in `pools` yet, so nothing else will ever close it.
         try (Connection conn = ds.getConnection()) {
             DatabaseMetaData meta = conn.getMetaData();
             // version not needed here
+        } catch (Exception e) {
+            ds.close();
+            throw e;
         }
 
         pools.put(connectionId, ds);

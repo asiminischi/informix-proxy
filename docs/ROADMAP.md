@@ -46,9 +46,9 @@ What this project still needs to be production-ready, roughly ordered by importa
 
 ## Operations
 
-**CI/CD pipeline** -- No build pipeline exists. Set up GitHub Actions or similar: lint, compile, test, build Docker image, push to registry, deploy.
+**~~CI/CD pipeline~~** -- Done: `.github/workflows/publish.yml` builds, tests, Trivy-scans, pushes to GHCR, and cosign-signs on every push. It also has a `deploy` job wired for staging that's ready but not yet cut over - see "Staging deployment" in `docs/DEPLOYMENT.md` for the remaining steps to activate it and decouple from presa-management's compose stack.
 
-**Container registry** -- The Docker image is only built locally. Push to a private registry (GitHub Container Registry, Docker Hub private, AWS ECR) for proper versioning and deployment.
+**~~Container registry~~** -- Done: images are pushed to `ghcr.io/postarodiy/informix-proxy`, multi-arch (amd64/arm64), signed, with SBOM and provenance attestation.
 
 **Kubernetes deployment** -- Docker Compose works for single-node. For multi-node production, create Helm charts or Kubernetes manifests with proper resource limits, readiness/liveness probes, and horizontal pod autoscaling.
 

@@ -119,7 +119,7 @@ public class InformixProxyServer extends InformixServiceGrpc.InformixServiceImpl
         PreparedStatementCache stmtCache = new PreparedStatementCache();
 
         TransactionService transactionService = new TransactionService(poolManager, metrics);
-        ConnectionService connectionService = new ConnectionService(poolManager, metrics);
+        ConnectionService connectionService = new ConnectionService(poolManager, metrics, stmtCache, transactionService);
         QueryService queryService = new QueryService(poolManager, stmtCache, transactionService, metrics);
         PreparedStatementService preparedService = new PreparedStatementService(poolManager, stmtCache, metrics);
         MetadataService metadataService = new MetadataService(poolManager, metrics);

@@ -2,15 +2,15 @@ name: CI / Build & Publish - informix-proxy
 
 on:
   push:
-    branches: [master]
-    paths:
-      - "src/**"
-      - "Dockerfile"
-      - "pom.xml"
-      - ".github/workflows/publish.yml"
-      - "docker-compose.yml"
+    branches:
+      - master
+      - "release/**"
+    tags:
+      - "v*.*.*"
   pull_request:
-    branches: [master]
+    branches:
+      - master
+      - "release/**"
   workflow_dispatch:
     inputs:
       push:
@@ -18,13 +18,16 @@ on:
         type: boolean
         default: true
       deploy:
-        description: "Deploy to prod?"
+        description: "Deploy to production?"
         type: boolean
         default: false
 
 concurrency:
-  group: informix-proxy-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 env:
   REGISTRY: ghcr.io
@@ -34,72 +37,147 @@ jobs:
   test:
     name: Test (Unit + Integration)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Set up JDK 11
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
         with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: 'maven'
+          java-version: "11"
+          distribution: "temurin"
+          cache: "maven"
 
       # Build the fat JAR so we can run the proxy from the command line
       - name: Package application
-        run: mvn package -DskipTests -B
+        run: mvn -B --no-transfer-progress package -DskipTests
 
       # Fast unit tests (no Docker needed)
       - name: Unit tests
-        run: mvn test -B -Dgroups='!integration'
+        run: mvn -B --no-transfer-progress test -Dgroups='!integration'
 
-      # Start only the Informix database (not the proxy)
+      # Start only the Informix database (not the proxy). "--wait" blocks
+      # until the compose healthcheck reports healthy instead of polling
+      # "docker ps" in an unbounded loop.
       - name: Start Informix
-        run: |
-          docker compose up -d informix-db
-          # Wait for Informix to be healthy
-          echo "Waiting for Informix…"
-          until docker ps | grep informix-db | grep -q 'healthy'; do sleep 2; done
+        run: docker compose up -d --wait --wait-timeout 420 informix-db
 
-      # Run the proxy JAR in the background, listening on 50051
+      # Run the proxy JAR in the background, listening on 50051 (gRPC) and
+      # 8080 (HTTP health endpoint). Poll with a bounded retry loop instead
+      # of a fixed sleep so the step fails fast if startup hangs.
       - name: Start proxy
         run: |
           java -jar target/informix-grpc-proxy-*.jar &
-          # Give it a moment to start
-          sleep 5
-          # Verify it's listening
-          curl -sf http://localhost:8080/healthz || { echo "Proxy health check failed"; exit 1; }
+          echo $! > proxy.pid
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:8080/healthz > /dev/null; then
+              echo "Proxy is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Proxy failed to become healthy" >&2
+          exit 1
 
       - name: Integration tests
-        run: mvn test -Dgroups="integration" -B
+        run: mvn -B --no-transfer-progress test -Dgroups="integration"
 
-      # Cleanup
+      # Cleanup - kill the tracked PID rather than pattern-matching all
+      # processes, and drop the Informix volume so the next run starts clean.
       - name: Stop services
         if: always()
         run: |
-          docker compose down
-          pkill -f 'informix-grpc-proxy' || true
+          [ -f proxy.pid ] && kill "$(cat proxy.pid)" 2>/dev/null || true
+          docker compose down -v
+
+  security-scan:
+    name: Trivy Secret & Config Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # Daily key: cheap enough to refetch once a day, and lets build-and-push
+      # (which needs this job first) reuse the same warm DB below instead of
+      # every job re-pulling it from the public OCI registry.
+      - name: Get date for Trivy DB cache key
+        id: date
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Trivy vulnerability DB
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ steps.date.outputs.date }}
+          restore-keys: |
+            trivy-db-
+
+      # Report: writes SARIF for the Security tab. exit-code 0 so a finding
+      # here never fails the build by itself - this step is for tracking only.
+      - name: Trivy filesystem scan (secrets + misconfigurations) - report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: secret,config
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          format: sarif
+          output: trivy-fs-results.sarif
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: trivy-fs-results.sarif
+          category: trivy-fs
+
+      # Gate: same scan again in table format. SARIF has no human-readable
+      # console output, so without this a failing build shows no detail -
+      # this step is what actually enforces the severity threshold and
+      # prints the offending finding(s) directly into the job log.
+      - name: Trivy filesystem scan (secrets + misconfigurations) - gate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: secret,config
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          format: table
 
   build-and-push:
     name: Build & Push
-    needs: test
+    needs: [test, security-scan]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
       id-token: write
+      security-events: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -107,7 +185,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -121,9 +199,71 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
+      # Build a single-arch image locally (not pushed) so it can be scanned
+      # before anything reaches the registry. The GHA cache is shared with
+      # the real multi-arch build below, so this does not double the cost.
+      - name: Build image for scanning
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: informix-proxy:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Same daily cache key as the security-scan job. That job always
+      # completes first (build-and-push needs it), so this restore is
+      # normally a hit and the DB is not re-pulled from the registry here.
+      - name: Get date for Trivy DB cache key
+        id: date
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Trivy vulnerability DB
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ steps.date.outputs.date }}
+          restore-keys: |
+            trivy-db-
+
+      # Report: writes SARIF for the Security tab. exit-code 0 so a finding
+      # here never fails the build by itself - this step is for tracking only.
+      - name: Trivy image vulnerability scan - report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: informix-proxy:scan
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+          format: sarif
+          output: trivy-image-results.sarif
+
+      - name: Upload image scan SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: trivy-image-results.sarif
+          category: trivy-image
+
+      # Gate: same scan again in table format so a failure shows the actual
+      # CVE IDs/packages directly in the job log instead of a bare non-zero
+      # exit with only warnings visible.
+      - name: Trivy image vulnerability scan - gate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: informix-proxy:scan
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -136,53 +276,100 @@ jobs:
           sbom: true
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Sign image
+      - name: Sign image (keyless)
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-          TAGS: ${{ steps.meta.outputs.tags }}
-        run: |
-          echo "${TAGS}" | xargs -I {} cosign sign --yes "{}@${DIGEST}"
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_REF}"
 
       - name: Summary
         run: |
-          echo "### Yippie 🐳 informix-proxy image published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| | |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Digest** | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Platforms** | \`linux/amd64\`, \`linux/arm64\` |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tags pushed:**" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Pin this exact build in docker-compose.yml:**" >> $GITHUB_STEP_SUMMARY
-          echo '```yaml' >> $GITHUB_STEP_SUMMARY
-          echo "image: ghcr.io/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### informix-proxy image published"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Digest** | \`${{ steps.build.outputs.digest }}\` |"
+            echo "| **Commit** | \`${{ github.sha }}\` |"
+            echo "| **Platforms** | \`linux/amd64\`, \`linux/arm64\` |"
+            echo ""
+            echo "**Tags pushed:**"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "**Pin this exact build in docker-compose.prod.yml:**"
+            echo '```yaml'
+            echo "image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    name: Deploy to Production
+    name: Deploy to Staging
     needs: build-and-push
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
+    # Self-hosted runners execute arbitrary job code on our own infrastructure,
+    # so this job must never be reachable from pull_request (a fork PR could
+    # otherwise run anything on the staging box). Only push and an explicit
+    # manual dispatch are allowed to reach it.
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy)
+    # Both labels are required so this can only land on the runner that is
+    # actually named+labeled "staging", never any other self-hosted runner
+    # that might be registered later.
+    runs-on: [self-hosted, staging]
+    timeout-minutes: 15
+    # Serialize deploys on the single physical staging box regardless of
+    # which branch/ref triggered them, so two concurrent runs can't race
+    # each other's "docker compose up".
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
     environment:
-      name: production
-      url: https://your-domain.com          # change to your actual service URL
+      name: staging
+      url: https://staging.your-domain.com # change to your actual staging URL
+    env:
+      IMAGE_REF: ${{ needs.build-and-push.outputs.image }}@${{ needs.build-and-push.outputs.digest }}
 
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          script: |
-            cd /opt/informix-proxy
-            docker compose pull informix-proxy
-            docker compose up -d --remove-orphans
-            docker image prune -f
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Refuse to deploy anything that was not built and signed by this
+      # exact workflow - closes the gap between "an image was published"
+      # and "the image we are about to run is the one we scanned".
+      - name: Verify image signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/publish.yml@refs/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE_REF}"
+
+      # Runs directly on the staging box (this *is* the self-hosted runner),
+      # so no SSH hop is needed. Deploy is a plain docker compose refresh.
+      - name: Deploy
+        run: |
+          set -euo pipefail
+          cd /opt/informix-proxy
+          export INFORMIX_PROXY_IMAGE="${IMAGE_REF}"
+          docker compose pull informix-proxy
+          docker compose up -d --remove-orphans
+          docker image prune -f
+
+      # Self-hosted runners are long-lived and reused across jobs, unlike
+      # GitHub-hosted VMs, so cached registry credentials must be cleared
+      # explicitly instead of relying on the machine being thrown away.
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ${{ env.REGISTRY }}

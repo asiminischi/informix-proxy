@@ -13,7 +13,7 @@
 mvn clean package
 ```
 
-This runs the protobuf compiler to generate Java classes from `src/main/proto/informix.proto`, compiles the proxy server, and produces a fat JAR at `target/informix-grpc-proxy-1.0.0.jar`.
+This runs the protobuf compiler to generate Java classes from `src/main/proto/informix.proto`, compiles the proxy server, and produces a fat JAR at `target/informix-grpc-proxy-1.1.1.jar`.
 
 If you only want to generate the protobuf classes without a full build:
 
@@ -53,7 +53,7 @@ target/
   generated-sources/protobuf/
     java/                           -- generated message classes
     grpc-java/                      -- generated service stubs
-  informix-grpc-proxy-1.0.0.jar    -- fat JAR after build
+  informix-grpc-proxy-1.1.1.jar    -- fat JAR after build
 ```
 
 ## Running locally (without Docker)
@@ -63,7 +63,7 @@ You need a reachable Informix instance. Set the environment:
 ```
 set GRPC_PORT=50051
 set METRICS_PORT=9090
-java -jar target/informix-grpc-proxy-1.0.0.jar
+java -jar target/informix-grpc-proxy-1.1.1.jar
 ```
 
 Or run directly from Maven:

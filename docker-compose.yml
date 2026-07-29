@@ -165,12 +165,10 @@ services:
       - POOL_MAX_LIFETIME_MS=1800000
       - POOL_CONNECTION_TEST_QUERY=SELECT 1 FROM systables WHERE tabid = 1
 
-      # Default Informix connection (can be overridden by clients)
-      # - DEFAULT_INFORMIX_HOST=informix-db
-      # - DEFAULT_INFORMIX_PORT=9088
-      # - DEFAULT_INFORMIX_DB=testdb
-      # - DEFAULT_INFORMIX_USER=informix
-      # - DEFAULT_INFORMIX_PASS=in4mix
+      # No Informix host/credentials here on purpose: the proxy is
+      # database-agnostic. Each client supplies host/port/database/username/
+      # password itself in the Connect RPC, so the proxy never needs to hold
+      # database credentials.
 
     depends_on:
       informix-db:

@@ -13,7 +13,7 @@ The proxy also adds connection pooling (HikariCP), query result streaming, prepa
 
 ## Quick start
 
-Requirements: Docker and Docker Compose.
+**Requirements:** Docker and Docker Compose, ~4 GB RAM free, and ports 3000, 9088-9093, 9100, 8080, 50051, 3100 free on your machine (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full port table if any of those collide with something else).
 
 ```
 docker compose up -d
@@ -30,7 +30,13 @@ This starts:
 - **node-exporter**, **cadvisor** -- host and container metrics
 - **loki**, **promtail** -- log aggregation
 
-Wait about 60 seconds for Informix to initialize. The db-init container will create the `testdb` database automatically.
+Wait about 60 seconds for Informix to initialize, then confirm everything is healthy:
+
+```
+docker compose ps
+```
+
+Every service should say `Up` or `healthy`. `db-init` is the one exception -- it does its job (creating the `testdb` database) and exits, so `Exited (0)` there is correct, not a failure.
 
 ## Test it
 
@@ -40,9 +46,19 @@ npm install
 node informix-client.js
 ```
 
-This connects to Informix through the proxy, runs queries against the test database, executes a transaction, and disconnects.
+This connects to Informix through the proxy, runs queries against the test database, executes a transaction, and disconnects. A wall of `customer`/`order` rows printed to the console means it worked.
 
 See [docs/CLIENTS.md](docs/CLIENTS.md) for client usage details.
+
+## If something doesn't work
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `docker compose ps` shows `informix-db` still starting after a few minutes | First boot is slow -- Informix initializes its instance from scratch | `docker compose logs -f informix-db`, wait for `Booted Informix Dynamic Server` in the log |
+| `db-init` shows a non-zero exit code | Ran before Informix finished booting, or `testdb` init failed partway | `docker compose logs db-init`, then `docker compose up -d db-init` to retry (it's idempotent -- safe to re-run) |
+| `node informix-client.js` hangs or times out | `informix-proxy` isn't up yet, or a port is already taken by something else on your machine | `docker compose ps` to check proxy status; `docker compose logs informix-proxy` for the actual error |
+| "port is already allocated" on `docker compose up` | Something else on your machine already uses one of the ports above | Stop the other process, or edit the port mapping in `docker-compose.yml` |
+| Want a clean slate | Any of the above still broken | `docker compose down -v` (deletes all data, including the test database), then `docker compose up -d` again |
 
 ## What gets created in the test database
 
@@ -118,15 +134,6 @@ scripts/             Database init script, setup helpers
 monitoring/          Prometheus, Grafana, Alertmanager, Loki configs
 docs/                Documentation
 ```
-
-## Documentation
-
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) -- how the proxy works, protocol, connection pooling
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) -- Docker setup, production config, Portainer
-- [docs/MONITORING.md](docs/MONITORING.md) -- Prometheus metrics, Grafana dashboards, alerting
-- [docs/CLIENTS.md](docs/CLIENTS.md) -- using the Node.js and Python clients
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) -- building from source, running tests, IDE setup
-- [docs/ROADMAP.md](docs/ROADMAP.md) -- what is implemented and what is not
 
 ## License
 
