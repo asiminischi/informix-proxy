@@ -4,7 +4,7 @@
   <groupId>com.informix</groupId>
   <artifactId>informix-grpc-proxy</artifactId>
   <name>Informix gRPC Proxy</name>
-  <version>1.1.0</version>
+  <version>1.1.1</version>
   <description>High-performance gRPC proxy for Informix databases</description>
   <build>
     <extensions>

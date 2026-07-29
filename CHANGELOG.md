@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-07-29
+
+### Added
+- CI/CD pipeline hardened to production grade (see `.github/workflows/publish.yml`): unit + integration test gate, Trivy secret/config/vulnerability scanning, cosign keyless image signing, and a `deploy` job for staging
+
+### Changed
+- Runtime image no longer bundles `grpcurl`; base OS packages patched
+- Documented the current staging deployment state (proxy co-located in `presa-management`'s compose stack) and the plan to decouple it into its own `/opt/informix-proxy` deployment - see "Staging deployment" in `docs/DEPLOYMENT.md`
+
+### Fixed
+- Stale `ghcr.io/asiminischi/...` image references updated to `ghcr.io/postarodiy/...` after the org transfer
+
 ## [1.1.0] - 2026-07-15
 
 ### Fixed
