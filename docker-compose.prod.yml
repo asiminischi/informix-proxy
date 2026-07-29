@@ -40,7 +40,7 @@ services:
     # digest that was scanned, signed, and verified in that run - do not
     # rely on a mutable tag like ":latest" in production. The "build:"
     # stanza is kept only as a local-dev fallback when the variable is unset.
-    image: ${INFORMIX_PROXY_IMAGE:-ghcr.io/asiminischi/informix-proxy:latest}
+    image: ${INFORMIX_PROXY_IMAGE:-ghcr.io/postarodiy/informix-proxy:latest}
     build:
       context: .
       dockerfile: Dockerfile
