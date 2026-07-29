@@ -1,28 +1,28 @@
 # =============================================================================
-# informix-proxy — Multi-stage Dockerfile
+# informix-proxy - Multi-stage Dockerfile
 # Stage 1: Build the fat JAR with Maven
 # Stage 2: Minimal JRE runtime with a curl-based health check
 # =============================================================================
 
-# ── Stage 1: Build ────────────────────────────────────────────────────────────
+# -- Stage 1: Build ----------------------------------------------------------
 FROM docker.io/library/maven:3.9-eclipse-temurin-11 AS builder
 
 WORKDIR /app
 
-# 1. Resolve dependencies first — this layer is cached until pom.xml changes
+# 1. Resolve dependencies first - this layer is cached until pom.xml changes
 COPY pom.xml .
 RUN mvn dependency:go-offline -B
 
-# 2. Generate protobuf sources — cached until proto files change
+# 2. Generate protobuf sources - cached until proto files change
 COPY src/main/proto/ src/main/proto/
 RUN mvn protobuf:compile protobuf:compile-custom -B
 
-# 3. Build the fat JAR — only reruns when source changes
+# 3. Build the fat JAR - only reruns when source changes
 COPY src/ src/
 RUN mvn package -DskipTests -B \
-  && echo "✓ Built: $(ls -lh target/informix-grpc-proxy-*.jar)"
+  && echo "Built: $(ls -lh target/informix-grpc-proxy-*.jar)"
 
-# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+# -- Stage 2: Runtime --------------------------------------------------------
 FROM eclipse-temurin:11-jre-jammy
 
 # curl is required at runtime for the HEALTHCHECK below, and is what every
@@ -38,12 +38,12 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Non-root user — never run a service as root
+# Non-root user - never run a service as root
 RUN groupadd --system proxygroup && useradd --system --gid proxygroup --no-create-home proxygroup
 USER proxygroup
 
 # Copy the fat JAR from the build stage
-COPY --from=builder --chown=proxygroup:proxygroup /app/target/informix-grpc-proxy-1.1.0.jar proxy.jar
+COPY --from=builder --chown=proxygroup:proxygroup /app/target/informix-grpc-proxy-*.jar proxy.jar
 
 # gRPC service port
 EXPOSE 50051

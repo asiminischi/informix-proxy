@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Informix gRPC Proxy — Integration Test Client
+ * Informix gRPC Proxy - Integration Test Client
  *
  * Reads connection details from .env (dotenv) and exercises every major
  * RPC exposed by the proxy: Connect, Ping, ExecuteQuery, ExecuteUpdate,
@@ -11,8 +11,8 @@
  *   node test-client.js  # run all tests
  *
  * Exit codes:
- *   0 — all tests passed
- *   1 — one or more tests failed
+ *   0 - all tests passed
+ *   1 - one or more tests failed
  */
 
 'use strict';
@@ -20,7 +20,7 @@
 require('dotenv').config();           // loads ./clients/nodejs/.env
 const InformixClient = require('./informix-client');
 
-// ─── Configuration from environment ────────────────────────────────────────
+// --- Configuration from environment ----------------------------------------
 const CONFIG = Object.freeze({
     proxy: {
         host: process.env.PROXY_HOST || 'localhost',
@@ -37,7 +37,7 @@ const CONFIG = Object.freeze({
     },
 });
 
-// ─── Pretty logging helpers ────────────────────────────────────────────────
+// --- Pretty logging helpers ------------------------------------------------
 const PASS = '\x1b[32mPASS\x1b[0m';
 const FAIL = '\x1b[31mFAIL\x1b[0m';
 const INFO = '\x1b[36mINFO\x1b[0m';
@@ -47,11 +47,11 @@ let failed = 0;
 
 function logResult(label, ok, detail = '') {
     const tag = ok ? PASS : FAIL;
-    console.log(`  [${tag}] ${label}${detail ? '  — ' + detail : ''}`);
+    console.log(`  [${tag}] ${label}${detail ? '  - ' + detail : ''}`);
     if (ok) passed++; else failed++;
 }
 
-// ─── Individual test cases ─────────────────────────────────────────────────
+// --- Individual test cases -------------------------------------------------
 
 async function testConnect(client) {
     const info = await client.connect(CONFIG.informix);
@@ -124,9 +124,9 @@ async function testTransaction(client) {
         );
         await client.execute("INSERT INTO _test_txn (val) VALUES (?)", ['committed']);
         await client.commit();
-        logResult('Transaction — commit', true);
+        logResult('Transaction - commit', true);
     } catch (err) {
-        logResult('Transaction — commit', false, err.message);
+        logResult('Transaction - commit', false, err.message);
         try { await client.rollback(); } catch (_) { /* ignore */ }
     }
 
@@ -138,9 +138,9 @@ async function testTransaction(client) {
         );
         await client.execute("INSERT INTO _test_rb (val) VALUES (?)", ['will-rollback']);
         await client.rollback();
-        logResult('Transaction — rollback', true);
+        logResult('Transaction - rollback', true);
     } catch (err) {
-        logResult('Transaction — rollback', false, err.message);
+        logResult('Transaction - rollback', false, err.message);
         try { await client.rollback(); } catch (_) { /* ignore */ }
     }
 
@@ -165,10 +165,10 @@ async function testDisconnect(client) {
     return true;
 }
 
-// ─── Runner ────────────────────────────────────────────────────────────────
+// --- Runner ----------------------------------------------------------------
 async function main() {
     console.log();
-    console.log(`[${INFO}] Informix gRPC Proxy — Integration Tests`);
+    console.log(`[${INFO}] Informix gRPC Proxy - Integration Tests`);
     console.log(`[${INFO}] Proxy   : ${CONFIG.proxy.host}:${CONFIG.proxy.port}`);
     console.log(`[${INFO}] DB Host : ${CONFIG.informix.host}:${CONFIG.informix.port}`);
     console.log(`[${INFO}] Database: ${CONFIG.informix.database}`);
@@ -194,7 +194,7 @@ async function main() {
     }
 
     console.log();
-    console.log(`  ── Results: ${passed} passed, ${failed} failed ──`);
+    console.log(`  -- Results: ${passed} passed, ${failed} failed --`);
     console.log();
 
     process.exit(failed > 0 ? 1 : 0);

@@ -67,7 +67,7 @@ sleep 3
 # ============================================================================
 
 if echo "SELECT name FROM sysdatabases WHERE name = '$DB_NAME';" | dbaccess sysmaster 2>/dev/null | grep -q "$DB_NAME"; then
-    log "Database '$DB_NAME' already exists — skipping initialization."
+    log "Database '$DB_NAME' already exists - skipping initialization."
     log "To reinitialize: echo 'DROP DATABASE $DB_NAME;' | dbaccess sysmaster"
     exit 0
 fi

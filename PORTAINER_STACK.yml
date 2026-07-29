@@ -1,6 +1,6 @@
 version: '3.8'
 
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 # INFORMIX GRPC PROXY - PORTAINER STACK
 #
 # Deploy this stack in Portainer with the following environment variables:
@@ -11,7 +11,7 @@ version: '3.8'
 # - SMTP_PASSWORD (required)
 # - PROXY_MEMORY_LIMIT (optional, default: 4G)
 # - INFORMIX_SIZE (optional, default: medium)
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
 
 networks:
   informix:
