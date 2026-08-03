@@ -1,0 +1,7 @@
+src/informix-descriptor.json
+coverage/
+
+# The root .gitignore excludes package-lock.json repo-wide (meant for the
+# plain-script client folders) - this package's CI runs `npm ci`, which
+# requires a committed lockfile.
+!/package-lock.json

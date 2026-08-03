@@ -1,6 +1,19 @@
 # Client Libraries
 
-## Node.js
+## TypeScript
+
+The typed, maintained client going forward. Published as
+`@postarodiy/informix-client` on GitHub Packages, built from
+`clients/typescript`. It has the same API surface as the legacy Node.js
+client below plus full typings, connection self-healing on transport
+errors for every RPC (not just queries), and a pluggable logger. See
+`clients/typescript/README.md` for install and usage.
+
+## Node.js (legacy)
+
+Untyped, unpublished (install from this repo path directly). Kept for
+existing consumers; not actively extended - use the TypeScript client
+above for anything new.
 
 ### Install
 

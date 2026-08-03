@@ -1,0 +1,55 @@
+# Publishes @postarodiy/informix-client to GitHub Packages on a published
+# GitHub Release whose tag starts with "ts-client-v" (distinct from the
+# "vX.Y.Z" tags used by publish.yml for the proxy's own Docker image, so the
+# two release trains never collide). Requires the tag's version suffix to
+# match clients/typescript/package.json, and the full test suite to pass,
+# before anything is published.
+
+name: TS Client Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+defaults:
+  run:
+    working-directory: clients/typescript
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'ts-client-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@postarodiy"
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+
+      - run: npm ci
+
+      - name: Verify release tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#ts-client-v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Release tag ts-client-v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

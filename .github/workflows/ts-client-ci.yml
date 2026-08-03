@@ -1,0 +1,79 @@
+# CI for clients/typescript (@postarodiy/informix-client) - lint/typecheck,
+# test, build. Path-filtered so it doesn't run on every Java-only change and
+# vice versa. Mirrors the job-splitting style used in auth-toolkit's ci.yml.
+
+name: TS Client CI
+
+on:
+  push:
+    branches:
+      - master
+      - "release/**"
+    paths:
+      - "clients/typescript/**"
+      - ".github/workflows/ts-client-ci.yml"
+  pull_request:
+    branches:
+      - master
+      - "release/**"
+    paths:
+      - "clients/typescript/**"
+      - ".github/workflows/ts-client-ci.yml"
+
+concurrency:
+  group: ts-client-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: clients/typescript
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  lint:
+    name: "Lint & Type-check"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+
+  test:
+    name: "Tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  build-verify:
+    name: "Build verification"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - run: npm ci
+      - run: npm run build
