@@ -30,5 +30,13 @@ console.log(`Copied ${protoSrc} -> ${join(protoDestDir, 'informix.proto')}`);
 
 const pbjs = join(packageRoot, 'node_modules', '.bin', 'pbjs');
 const descriptorOut = join(packageRoot, 'src', 'informix-descriptor.json');
-execFileSync(pbjs, ['-t', 'json', '-o', descriptorOut, protoSrc], { stdio: 'inherit' });
+// --keep-case: pbjs otherwise renames every field to camelCase as its
+// canonical name (e.g. connection_id -> connectionId), keeping the
+// original only as unused "protoName" metadata. protoLoader.fromJSON()
+// builds directly off that canonical name, so without this flag every
+// snake_case field access in the client (connection_id, rows_affected,
+// total_rows, ...) silently reads undefined - keepCase in the loader
+// options below never gets a chance to act, since the descriptor never
+// had the snake_case name to begin with.
+execFileSync(pbjs, ['-t', 'json', '--keep-case', '-o', descriptorOut, protoSrc], { stdio: 'inherit' });
 console.log(`Generated ${descriptorOut}`);
